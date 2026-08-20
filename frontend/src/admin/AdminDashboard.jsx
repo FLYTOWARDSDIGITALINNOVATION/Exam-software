@@ -37,6 +37,7 @@ const AdminDashboard = () => {
     const [analyzingAttempt, setAnalyzingAttempt] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [studentSearchQuery, setStudentSearchQuery] = useState('');
+    const [selectedVaultCategory, setSelectedVaultCategory] = useState(null);
 
     const navigate = useNavigate();
 
@@ -46,23 +47,28 @@ const AdminDashboard = () => {
             const token = localStorage.getItem('token');
             const config = { headers: { Authorization: `Bearer ${token}` } };
 
-            const statsResponse = await axios.get(`${API_URL}/api/admin/dashboard-stats`, config);
+            const [
+                statsResponse,
+                usersResponse,
+                qbResponse,
+                reRes,
+                pendingRegRes,
+                reviewsRes
+            ] = await Promise.all([
+                axios.get(`${API_URL}/api/admin/dashboard-stats`, config),
+                axios.get(`${API_URL}/api/admin/users`, config),
+                axios.get(`${API_URL}/api/admin/question-banks`, config),
+                axios.get(`${API_URL}/api/admin/reattempt-requests`, config),
+                axios.get(`${API_URL}/api/admin/pending-registrations`, config),
+                axios.get(`${API_URL}/api/admin/reviews`, config)
+            ]);
+
             setStats(statsResponse.data.stats);
             setChartData(statsResponse.data.charts);
-
-            const usersResponse = await axios.get(`${API_URL}/api/admin/users`, config);
             setUsers(usersResponse.data);
-
-            const qbResponse = await axios.get(`${API_URL}/api/admin/question-banks`, config);
             setQuestionBanks(qbResponse.data);
-
-            const reRes = await axios.get(`${API_URL}/api/admin/reattempt-requests`, config);
             setReattemptRequests(reRes.data);
-
-            const pendingRegRes = await axios.get(`${API_URL}/api/admin/pending-registrations`, config);
             setPendingRegistrations(pendingRegRes.data);
-
-            const reviewsRes = await axios.get(`${API_URL}/api/admin/reviews`, config);
             setReviews(reviewsRes.data);
 
         } catch (err) {
@@ -345,9 +351,13 @@ const AdminDashboard = () => {
         }
     };
 
-    const filteredQuestionBanks = questionBanks.filter(bank => 
-        bank.title.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    const filteredQuestionBanks = questionBanks.filter(bank => {
+        const titleMatch = bank.title.toLowerCase().includes(searchQuery.toLowerCase());
+        if (!selectedVaultCategory) return titleMatch;
+        const cats = Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : ['Both']);
+        if (selectedVaultCategory === 'Both') return titleMatch && (cats.includes('Both') || cats.length === 0);
+        return titleMatch && (cats.includes(selectedVaultCategory) || cats.includes('Both'));
+    }).sort((a, b) => (a.title || "").localeCompare(b.title || ""));
 
     const filteredStudents = users.filter(u => 
         (u.role || 'student').toLowerCase() === 'student' &&
@@ -402,7 +412,7 @@ return (
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
-                    {activeTab === 'Question Vault' && (
+                    {activeTab === 'Question Vault' && selectedVaultCategory && (
                         <button
                             onClick={() => setIsUploadModalOpen(true)}
                             className="w-full sm:w-auto bg-[#C2410C] hover:bg-[#9a3412] text-white px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors shadow-lg shadow-orange-900/10"
@@ -462,85 +472,141 @@ return (
             {/* CONTENT: QUESTION VAULT */}
             {activeTab === 'Question Vault' && (
                 <div>
-                    <div className="mb-8 flex flex-col md:flex-row gap-6 items-start md:items-center justify-between">
-                        <div className="relative w-full md:w-96">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                            <input
-                                type="text"
-                                placeholder={`Search question banks...`}
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="pl-10 pr-4 py-2 w-full rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-sm"
-                            />
+                    {!selectedVaultCategory ? (
+                        /* ── CATEGORY LANDING GRID ── */
+                        <div>
+                            <p className="text-slate-500 mb-6 text-sm">Select a category to view and manage its tests.</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                                {[
+                                    { name: 'Both', color: 'teal', bg: 'bg-teal-50', border: 'border-teal-200', badge: 'bg-teal-100 text-teal-700', hover: 'hover:border-teal-400 hover:shadow-teal-100', icon: '📚' },
+                                    { name: 'MRB', color: 'orange', bg: 'bg-orange-50', border: 'border-orange-200', badge: 'bg-orange-100 text-orange-700', hover: 'hover:border-orange-400 hover:shadow-orange-100', icon: '🏥' },
+                                    { name: 'AIAPGET', color: 'indigo', bg: 'bg-indigo-50', border: 'border-indigo-200', badge: 'bg-indigo-100 text-indigo-700', hover: 'hover:border-indigo-400 hover:shadow-indigo-100', icon: '🎓' },
+                                    { name: 'Crash Course', color: 'rose', bg: 'bg-rose-50', border: 'border-rose-200', badge: 'bg-rose-100 text-rose-700', hover: 'hover:border-rose-400 hover:shadow-rose-100', icon: '⚡' },
+                                ].map(({ name, bg, border, badge, hover, icon }) => {
+                                    const count = questionBanks.filter(b => {
+                                        const cats = Array.isArray(b.category) ? b.category : (b.category ? [b.category] : ['Both']);
+                                        if (name === 'Both') return cats.includes('Both') || cats.length === 0;
+                                        return cats.includes(name) || cats.includes('Both');
+                                    }).length;
+                                    return (
+                                        <button
+                                            key={name}
+                                            onClick={() => { setSelectedVaultCategory(name); setSearchQuery(''); }}
+                                            className={`group text-left p-6 rounded-2xl border-2 ${bg} ${border} ${hover} shadow-sm hover:shadow-lg transition-all duration-200 cursor-pointer`}
+                                        >
+                                            <div className="text-3xl mb-3">{icon}</div>
+                                            <h3 className="text-lg font-bold text-slate-800 mb-1">{name}</h3>
+                                            <div className="flex items-center justify-between mt-3">
+                                                <span className={`text-[11px] font-black uppercase px-2.5 py-1 rounded-full ${badge}`}>
+                                                    {count} {count === 1 ? 'test' : 'tests'}
+                                                </span>
+                                                <span className="text-slate-400 group-hover:translate-x-1 transition-transform text-lg">→</span>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         </div>
-                    </div>
+                    ) : (
+                        /* ── CATEGORY DETAIL VIEW ── */
+                        <div>
+                            {/* Breadcrumb + back */}
+                            <div className="flex items-center gap-2 mb-6">
+                                <button
+                                    onClick={() => { setSelectedVaultCategory(null); setSearchQuery(''); }}
+                                    className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors"
+                                >
+                                    ← Back
+                                </button>
+                                <span className="text-slate-300">/</span>
+                                <span className={`text-[11px] font-black uppercase px-2.5 py-1 rounded-full ${
+                                    selectedVaultCategory === 'AIAPGET' ? 'bg-indigo-100 text-indigo-700' :
+                                    selectedVaultCategory === 'MRB' ? 'bg-orange-100 text-orange-700' :
+                                    selectedVaultCategory === 'Crash Course' ? 'bg-rose-100 text-rose-700' :
+                                    'bg-teal-100 text-teal-700'
+                                }`}>{selectedVaultCategory}</span>
+                            </div>
 
-                    <div className="space-y-6">
-                        {filteredQuestionBanks.length > 0 ?
-                            filteredQuestionBanks.map((bank) => (
-                                <div key={bank._id || bank.id} className="bg-white p-4 md:p-6 rounded-xl border border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-0 hover:shadow-sm transition-shadow">
-                                    <div className="w-full">
-                                        <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-2 md:mb-1">
-                                            <h4 className="text-base md:text-lg font-bold text-slate-900">{bank.title}</h4>
-                                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${bank.difficulty === 'Hard' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'
-                                                }`}>
-                                                {bank.difficulty}
-                                            </span>
-                                            {(Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : ['Both'])).map((cat, idx) => (
-                                                <span key={idx} className={`text-[10px] px-2 py-0.5 rounded-full font-black tracking-wider ${cat === 'AIAPGET' ? 'bg-indigo-100 text-indigo-700' : cat === 'MRB' ? 'bg-orange-100 text-orange-700' : cat === 'Crash Course' ? 'bg-rose-100 text-rose-700' : 'bg-teal-100 text-teal-700'}`}>
-                                                    {cat}
-                                                </span>
-                                            ))}
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-slate-500 font-medium">
-                                            <span>{bank.questionsCount || bank.questions} questions</span>
-                                            <span>Uploaded {new Date(bank.createdAt || bank.uploaded).toLocaleDateString()}</span>
-                                            <span>{bank.attempts} attempts</span>
-                                        </div>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
-                                        <div className="flex items-center gap-3">
-                                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter md:hidden">Status:</span>
-                                            <div className="flex flex-col items-center">
-                                                <span className="text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-tighter hidden md:block">Test Status</span>
-                                                <button
-                                                    onClick={() => handleToggleStatus(bank)}
-                                                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${bank.status === 'published' ? 'bg-green-500' : 'bg-slate-300'}`}
-                                                >
-                                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${bank.status === 'published' ? 'translate-x-6' : 'translate-x-1'}`} />
-                                                </button>
-                                                <span className={`text-[10px] font-bold mt-1 uppercase hidden md:block ${bank.status === 'published' ? 'text-green-600' : 'text-slate-400'}`}>
-                                                    {bank.status === 'published' ? 'Active' : 'Disabled'}
-                                                </span>
+                            {/* Search */}
+                            <div className="mb-6">
+                                <div className="relative w-full md:w-96">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                    <input
+                                        type="text"
+                                        placeholder={`Search in ${selectedVaultCategory}...`}
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        className="pl-10 pr-4 py-2 w-full rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-sm"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Tests list */}
+                            <div className="space-y-4">
+                                {filteredQuestionBanks.length > 0 ?
+                                    filteredQuestionBanks.map((bank) => (
+                                        <div key={bank._id || bank.id} className="bg-white p-4 md:p-6 rounded-xl border border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-0 hover:shadow-sm transition-shadow">
+                                            <div className="w-full">
+                                                <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-2 md:mb-1">
+                                                    <h4 className="text-base md:text-lg font-bold text-slate-900">{bank.title}</h4>
+                                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${bank.difficulty === 'Hard' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}`}>
+                                                        {bank.difficulty}
+                                                    </span>
+                                                    {(Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : ['Both'])).map((cat, idx) => (
+                                                        <span key={idx} className={`text-[10px] px-2 py-0.5 rounded-full font-black tracking-wider ${cat === 'AIAPGET' ? 'bg-indigo-100 text-indigo-700' : cat === 'MRB' ? 'bg-orange-100 text-orange-700' : cat === 'Crash Course' ? 'bg-rose-100 text-rose-700' : 'bg-teal-100 text-teal-700'}`}>
+                                                            {cat}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                                <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-slate-500 font-medium">
+                                                    <span>{bank.questionsCount || bank.questions} questions</span>
+                                                    <span>Uploaded {new Date(bank.createdAt || bank.uploaded).toLocaleDateString()}</span>
+                                                    <span>{bank.attempts} attempts</span>
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter md:hidden">Status:</span>
+                                                    <div className="flex flex-col items-center">
+                                                        <span className="text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-tighter hidden md:block">Test Status</span>
+                                                        <button
+                                                            onClick={() => handleToggleStatus(bank)}
+                                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${bank.status === 'published' ? 'bg-green-500' : 'bg-slate-300'}`}
+                                                        >
+                                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${bank.status === 'published' ? 'translate-x-6' : 'translate-x-1'}`} />
+                                                        </button>
+                                                        <span className={`text-[10px] font-bold mt-1 uppercase hidden md:block ${bank.status === 'published' ? 'text-green-600' : 'text-slate-400'}`}>
+                                                            {bank.status === 'published' ? 'Active' : 'Disabled'}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div className="w-px h-8 bg-slate-100 mx-1 hidden md:block"></div>
+                                                <div className="flex items-center gap-1">
+                                                    <button
+                                                        onClick={() => { setStatsBank(bank); fetchBankStats(bank._id); }}
+                                                        className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
+                                                        title="Viewers & Attempts"
+                                                    >
+                                                        <Eye size={18} />
+                                                    </button>
+                                                    <button onClick={() => handleDownload(bank)} className="p-2 text-slate-400 hover:text-teal-600 transition-colors" title="Download"><Download size={18} /></button>
+                                                    <button onClick={() => setEditingBank(bank)} className="p-2 text-slate-400 hover:text-blue-600 transition-colors" title="Edit"><Edit size={18} /></button>
+                                                    <button onClick={() => handleDelete(bank._id)} className="p-2 text-slate-400 hover:text-red-600 transition-colors" title="Delete"><Trash2 size={18} /></button>
+                                                </div>
                                             </div>
                                         </div>
-                                        <div className="w-px h-8 bg-slate-100 mx-1 hidden md:block"></div>
-                                        <div className="flex items-center gap-1">
-                                            <button 
-                                                onClick={() => {
-                                                    setStatsBank(bank);
-                                                    fetchBankStats(bank._id);
-                                                }} 
-                                                className="p-2 text-slate-400 hover:text-indigo-600 transition-colors" 
-                                                title="Viewers & Attempts"
-                                            >
-                                                <Eye size={18} />
-                                            </button>
-                                            <button onClick={() => handleDownload(bank)} className="p-2 text-slate-400 hover:text-teal-600 transition-colors" title="Download"><Download size={18} /></button>
-                                            <button onClick={() => setEditingBank(bank)} className="p-2 text-slate-400 hover:text-blue-600 transition-colors" title="Edit"><Edit size={18} /></button>
-                                            <button onClick={() => handleDelete(bank._id)} className="p-2 text-slate-400 hover:text-red-600 transition-colors" title="Delete"><Trash2 size={18} /></button>
+                                    )) : (
+                                        <div className="text-center py-16 text-slate-400">
+                                            <div className="text-4xl mb-3">📭</div>
+                                            <p className="font-medium">No tests found in <span className="font-bold">{selectedVaultCategory}</span>.</p>
+                                            <p className="text-sm mt-1">Click "Upload New" to add the first test here.</p>
                                         </div>
-                                    </div>
-                                </div>
-                            )) : (
-                                <div className="text-center py-10 text-slate-400">
-                                    No question banks found.
-                                </div>
-                            )}
-                    </div>
+                                    )}
+                            </div>
+                        </div>
+                    )}
                 </div>
-            )
-            }
+            )}
 
             {/* CONTENT: STUDENTS */}
             {
@@ -1004,6 +1070,7 @@ return (
                     onClose={() => setIsUploadModalOpen(false)}
                     onSuccess={handleUploadSuccess}
                     onAuthError={handleLogout}
+                    defaultCategory={selectedVaultCategory}
                 />
             )}
             {editingBank && (
@@ -1049,19 +1116,57 @@ const OverviewCard = ({ icon, value, label }) => (
     </div>
 );
 
-const UploadModal = ({ onClose, onSuccess, onAuthError }) => {
-    const [formData, setFormData] = useState({
+const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory }) => {
+    const DRAFT_KEY = 'questionbank_draft';
+
+    const getSavedDraft = () => {
+        try {
+            const saved = localStorage.getItem(DRAFT_KEY);
+            return saved ? JSON.parse(saved) : null;
+        } catch { return null; }
+    };
+
+    const draft = getSavedDraft();
+
+    const [formData, setFormData] = useState(draft?.formData || {
         title: '',
         difficulty: 'Easy',
-        category: ['Both'],
+        category: defaultCategory ? [defaultCategory] : ['Both'],
         negativeMarking: false,
         duration: 60,
         status: 'published'
     });
-    const [questions, setQuestions] = useState([
+    const [questions, setQuestions] = useState(draft?.questions || [
         { question: '', options: ['', '', '', ''], answer: 0 }
     ]);
     const [loading, setLoading] = useState(false);
+    const [autoSaveStatus, setAutoSaveStatus] = useState(draft ? `Restored draft from ${new Date(draft.savedAt).toLocaleTimeString()}` : 'Auto-save ON');
+    const [autoSaveEnabled] = useState(true);
+
+    // Auto-save to localStorage every 30s and on change
+    const saveDraft = React.useCallback(() => {
+        try {
+            localStorage.setItem(DRAFT_KEY, JSON.stringify({
+                formData,
+                questions: questions.map(q => ({ ...q, image: undefined, imagePreview: undefined })),
+                savedAt: new Date().toISOString()
+            }));
+            setAutoSaveStatus(`Saved at ${new Date().toLocaleTimeString()}`);
+        } catch (e) { console.error('Draft save failed', e); }
+    }, [formData, questions]);
+
+    useEffect(() => {
+        const interval = setInterval(saveDraft, 30000);
+        return () => clearInterval(interval);
+    }, [saveDraft]);
+
+    // Save on every change (debounced via interval above, also save immediately on unmount)
+    useEffect(() => {
+        setAutoSaveStatus('Unsaved changes...');
+        const t = setTimeout(() => saveDraft(), 2000);
+        return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [formData, questions]);
 
 
 
@@ -1129,6 +1234,7 @@ const UploadModal = ({ onClose, onSuccess, onAuthError }) => {
                 }
             });
             onSuccess();
+            localStorage.removeItem('questionbank_draft');
         } catch (err) {
             console.error(err);
             if (err.response && (err.response.status === 401 || err.response.status === 403)) {
@@ -1140,7 +1246,6 @@ const UploadModal = ({ onClose, onSuccess, onAuthError }) => {
             setLoading(false);
         }
     };
-
 
     const triggerSubmit = async (e, forceStatus) => {
         e.preventDefault();
@@ -1156,7 +1261,6 @@ const UploadModal = ({ onClose, onSuccess, onAuthError }) => {
         data.append('negativeMarking', formData.negativeMarking);
         data.append('duration', formData.duration);
         data.append('status', updatedStatus);
-
 
         const questionsToSave = questions.map((q, index) => {
             if (q.image) {
@@ -1181,6 +1285,7 @@ const UploadModal = ({ onClose, onSuccess, onAuthError }) => {
                 }
             });
             onSuccess();
+            localStorage.removeItem('questionbank_draft');
         } catch (err) {
             console.error(err);
             if (err.response && (err.response.status === 401 || err.response.status === 403)) {
@@ -1199,6 +1304,16 @@ const UploadModal = ({ onClose, onSuccess, onAuthError }) => {
                 <div className="p-4 md:p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                     <h3 className="text-lg md:text-xl font-serif font-bold text-slate-800">Create Question Bank</h3>
                     <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-full transition-colors"><X size={20} className="text-gray-500" /></button>
+                </div>
+
+                {/* Auto-save status bar */}
+                <div className="flex items-center gap-2 px-4 md:px-6 py-2 bg-green-50 border-b border-green-100">
+                    <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                    </span>
+                    <span className="text-[11px] font-bold text-green-700 uppercase tracking-wider">Auto-save ON</span>
+                    <span className="text-[11px] text-green-600 ml-1">• {autoSaveStatus}</span>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6">
@@ -1407,12 +1522,52 @@ const EditModal = ({ bank, onClose, onSuccess }) => {
     });
 
     const [questions, setQuestions] = useState(
-        (bank.questions || []).map((q, idx) => ({
+        (bank.questions || []).map((q) => ({
             ...q,
             imagePreview: q.filename ? `${API_URL}/uploads/${q.filename}` : null
         }))
     );
     const [loading, setLoading] = useState(false);
+    const [autoSaveStatus, setAutoSaveStatus] = useState('Auto-save ON');
+
+    // Auto-save to server for Edit (has existing ID)
+    const autoSaveToServer = React.useCallback(async () => {
+        if (!bank._id) return;
+        setAutoSaveStatus('Saving...');
+        try {
+            const data = new FormData();
+            data.append('title', formData.title);
+            data.append('difficulty', formData.difficulty);
+            data.append('category', formData.category);
+            data.append('negativeMarking', formData.negativeMarking);
+            data.append('duration', formData.duration);
+            data.append('status', formData.status);
+            const questionsToSave = questions.map(q => ({
+                question: q.question, options: q.options, answer: q.answer, filename: q.filename, _id: q._id
+            }));
+            data.append('updatedQuestions', JSON.stringify(questionsToSave));
+            data.append('updatedFilenames', JSON.stringify([]));
+            const token = localStorage.getItem('token');
+            await axios.put(`${API_URL}/api/admin/question-banks/${bank._id}`, data, {
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'multipart/form-data' }
+            });
+            setAutoSaveStatus(`Saved at ${new Date().toLocaleTimeString()}`);
+        } catch (e) {
+            setAutoSaveStatus('Auto-save failed');
+        }
+    }, [bank._id, formData, questions]);
+
+    useEffect(() => {
+        const interval = setInterval(autoSaveToServer, 30000);
+        return () => clearInterval(interval);
+    }, [autoSaveToServer]);
+
+    useEffect(() => {
+        setAutoSaveStatus('Unsaved changes...');
+        const t = setTimeout(() => autoSaveToServer(), 3000);
+        return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [formData, questions]);
 
     const handleAddQuestion = () => {
         setQuestions([...questions, { question: '', options: ['', '', '', ''], answer: 0 }]);
@@ -1492,6 +1647,16 @@ const EditModal = ({ bank, onClose, onSuccess }) => {
                 <div className="p-4 md:p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                     <h3 className="text-lg md:text-xl font-serif font-bold text-slate-800">Edit Question Bank</h3>
                     <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded-full transition-colors"><X size={20} className="text-gray-500" /></button>
+                </div>
+
+                {/* Auto-save status bar */}
+                <div className="flex items-center gap-2 px-4 md:px-6 py-2 bg-green-50 border-b border-green-100">
+                    <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                    </span>
+                    <span className="text-[11px] font-bold text-green-700 uppercase tracking-wider">Auto-save ON</span>
+                    <span className="text-[11px] text-green-600 ml-1">• {autoSaveStatus}</span>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6">
@@ -1977,7 +2142,9 @@ const QuestionBankStatsModal = ({ bank, data, loading, onClose, setAnalyzingAtte
                                     <div className="text-left sm:text-right w-full sm:w-auto border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-50">
                                         <div className="flex items-center gap-2 justify-start sm:justify-end mb-1">
                                             <span className="text-[10px] md:text-xs font-bold text-slate-400 uppercase">Latest Score:</span>
-                                            <span className={`px-2 py-0.5 rounded text-[10px] font-black ${a.score >= 50 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{a.score}%</span>
+                                            <span className={`px-2 py-0.5 rounded text-[10px] font-black ${a.score >= 50 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                {a.score}% {data.questions && data.questions.length > 0 && `(${Math.round((a.score / 100) * data.questions.length)}/${data.questions.length})`}
+                                            </span>
                                         </div>
                                         <p className="text-[10px] font-medium text-slate-500 mb-2">{new Date(a.date).toLocaleString()}</p>
                                         <button 
