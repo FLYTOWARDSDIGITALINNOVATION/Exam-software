@@ -30,12 +30,20 @@ mongoose.connect(MONGODB_URI)
     .then(() => {
         console.log('✅ Connected to MongoDB');
         createInitialAdmin();
+        seedCategories();
     })
     .catch(err => console.error('❌ MongoDB Connection Error:', err.message));
 
 // --- FILE UPLOAD SETUP ---
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+
+// Subdirectories for structured storage
+const videoUploadDir = path.join(uploadDir, 'videos');
+if (!fs.existsSync(videoUploadDir)) fs.mkdirSync(videoUploadDir, { recursive: true });
+
+const thumbUploadDir = path.join(uploadDir, 'thumbnails');
+if (!fs.existsSync(thumbUploadDir)) fs.mkdirSync(thumbUploadDir, { recursive: true });
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, uploadDir),
@@ -47,15 +55,36 @@ const fileFilter = (req, file, cb) => {
     if (allowedTypes.includes(file.mimetype)) {
         cb(null, true);
     } else {
-        cb(null, false); // Accept but maybe handle error later if strictly needed, or return error here.
-        // Formulter error handling to work well, we might need to handle it in the route.
-        // Let's just return true for now to avoid the multer error crashing the app if the frontend sends a weird type,
-        // but frontend validation should catch it. Actually, returning error is better.
         cb(new Error('Invalid file type. Only JSON, PDF, and Images are allowed!'), false);
     }
 };
 
 const upload = multer({ storage, fileFilter });
+
+// Video & Thumbnail storage engine for media uploads
+const videoDiskStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        if (file.fieldname === 'video') {
+            cb(null, videoUploadDir);
+        } else if (file.fieldname === 'thumbnail') {
+            cb(null, thumbUploadDir);
+        } else {
+            cb(null, uploadDir);
+        }
+    },
+    filename: (req, file, cb) => {
+        const cleanExt = path.extname(file.originalname).toLowerCase();
+        const cleanBase = path.basename(file.originalname, cleanExt).replace(/[^a-zA-Z0-9_-]/g, '_');
+        cb(null, `${file.fieldname}-${Date.now()}-${cleanBase}${cleanExt}`);
+    }
+});
+
+const videoUpload = multer({
+    storage: videoDiskStorage,
+    limits: {
+        fileSize: 1024 * 1024 * 1024 * 2 // Up to 2GB video support
+    }
+});
 
 
 
@@ -66,7 +95,8 @@ const UserSchema = new mongoose.Schema({
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     role: { type: String, enum: ['student', 'faculty', 'admin'], default: 'student' },
-    category: { type: String, enum: ['MRB', 'AIAPGET', 'Crash Course', 'Both'], default: 'Both' },
+    category: { type: String, default: 'Both' },
+    batch: { type: String, default: 'All' },
     // Student & Profile fields
     gender: String,
     dob: String,
@@ -108,6 +138,7 @@ const QuestionBankSchema = new mongoose.Schema({
     title: String,
     difficulty: String,
     category: { type: [String], default: ['Both'] },
+    batches: { type: [String], default: ['All'] },
     filename: String,
     filenames: [String],
     questions: [{
@@ -126,6 +157,32 @@ const QuestionBankSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const QuestionBank = mongoose.model('QuestionBank', QuestionBankSchema);
+
+const CategorySchema = new mongoose.Schema({
+    name: { type: String, required: true, unique: true },
+    batches: { type: [String], default: [] }
+}, { timestamps: true });
+
+const Category = mongoose.model('Category', CategorySchema);
+
+const seedCategories = async () => {
+    try {
+        const defaults = [
+            { name: 'MRB', batches: [] },
+            { name: 'AIAPGET', batches: [] },
+            { name: 'Crash Course', batches: [] },
+            { name: 'Both', batches: [] }
+        ];
+        for (const item of defaults) {
+            const exists = await Category.findOne({ name: item.name });
+            if (!exists) {
+                await Category.create(item);
+            }
+        }
+    } catch (e) {
+        console.error('Category seed error:', e.message);
+    }
+};
 
 const AttemptSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -167,6 +224,22 @@ const QuestionViewSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const QuestionView = mongoose.model('QuestionView', QuestionViewSchema);
+
+const VideoSchema = new mongoose.Schema({
+    title: { type: String, required: true, trim: true },
+    description: { type: String, default: '', trim: true },
+    duration: { type: String, default: '00:00' },
+    videoUrl: { type: String, required: true, trim: true },
+    thumbnail: { type: String, default: '', trim: true },
+    size: { type: Number, default: 0 },
+    category: { type: String, default: 'General' },
+    storageType: { type: String, enum: ['local', 'object_storage', 'external'], default: 'local' },
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    views: { type: Number, default: 0 },
+    isPublished: { type: Boolean, default: true }
+}, { timestamps: true });
+
+const Video = mongoose.model('Video', VideoSchema);
 
 
 // --- MIDDLEWARE ---
@@ -349,7 +422,7 @@ app.post('/api/user/update', verifyToken, async (req, res) => {
 });
 
 // 2. Admin: Dashboard Stats & Student List
-app.get('/api/admin/dashboard-stats', verifyAdmin, async (req, res) => {
+app.get('/api/admin/dashboard-stats', verifyEducator, async (req, res) => {
     try {
         const totalStudents = await User.countDocuments({ role: 'student' });
         const totalTests = await QuestionBank.countDocuments();
@@ -402,6 +475,126 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req, res) => {
         await ReAttemptRequest.deleteMany({ userId: req.params.id });
         res.json({ message: 'Student and related data deleted successfully' });
     } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+app.put('/api/admin/users/:id', verifyEducator, async (req, res) => {
+    try {
+        const { category, batch, fullName, regNo, status } = req.body;
+        let user = await User.findById(req.params.id);
+        if (!user) {
+            user = await AdminUser.findById(req.params.id);
+        }
+        if (!user) return res.status(404).json({ message: 'Student not found' });
+
+        if (category) user.category = category;
+        if (batch !== undefined) user.batch = batch;
+        if (fullName) user.fullName = fullName;
+        if (regNo !== undefined) user.regNo = regNo;
+        if (status) user.status = status;
+
+        await user.save();
+        res.json({ message: 'Student details updated successfully', user });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Category / Batch Management Endpoints
+app.get('/api/categories', async (req, res) => {
+    try {
+        const categories = await Category.find().sort({ createdAt: 1 });
+        const defaults = [
+            { name: 'MRB', batches: [] },
+            { name: 'AIAPGET', batches: [] },
+            { name: 'Crash Course', batches: [] },
+            { name: 'Both', batches: [] }
+        ];
+        const existingNames = categories.map(c => c.name);
+        for (const def of defaults) {
+            if (!existingNames.includes(def.name)) {
+                categories.push(new Category(def));
+            }
+        }
+        res.json(categories);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Add batch INSIDE a specific category
+app.post('/api/admin/categories/:categoryName/batches', verifyEducator, async (req, res) => {
+    try {
+        const { categoryName } = req.params;
+        const { batchName } = req.body;
+        if (!batchName || !batchName.trim()) {
+            return res.status(400).json({ message: 'Batch name is required' });
+        }
+        const trimmedBatch = batchName.trim();
+        let cat = await Category.findOne({ name: { $regex: new RegExp(`^${categoryName}$`, 'i') } });
+        if (!cat) {
+            cat = new Category({ name: categoryName, batches: [trimmedBatch] });
+        } else {
+            if (!cat.batches) cat.batches = [];
+            const exists = cat.batches.some(b => b.toLowerCase() === trimmedBatch.toLowerCase());
+            if (exists) {
+                return res.status(400).json({ message: `Batch "${trimmedBatch}" already exists in ${categoryName}` });
+            }
+            cat.batches.push(trimmedBatch);
+        }
+        await cat.save();
+        res.status(201).json({ message: `Batch "${trimmedBatch}" added to ${categoryName}`, category: cat });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Delete batch from INSIDE a specific category
+app.delete('/api/admin/categories/:categoryName/batches/:batchName', verifyEducator, async (req, res) => {
+    try {
+        const { categoryName, batchName } = req.params;
+        const cat = await Category.findOne({ name: { $regex: new RegExp(`^${categoryName}$`, 'i') } });
+        if (!cat) return res.status(404).json({ message: 'Category not found' });
+        if (cat.batches) {
+            cat.batches = cat.batches.filter(b => b.toLowerCase() !== batchName.toLowerCase());
+            await cat.save();
+        }
+        res.json({ message: `Batch "${batchName}" removed from ${categoryName}`, category: cat });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+app.post('/api/admin/categories', verifyEducator, async (req, res) => {
+    try {
+        const { name, batches } = req.body;
+        if (!name || !name.trim()) {
+            return res.status(400).json({ message: 'Category name is required' });
+        }
+        const trimmed = name.trim();
+        const existing = await Category.findOne({ name: { $regex: new RegExp(`^${trimmed}$`, 'i') } });
+        if (existing) {
+            return res.status(400).json({ message: 'Category already exists' });
+        }
+        const initialBatches = Array.isArray(batches) ? batches : [];
+        const newCat = new Category({ name: trimmed, batches: initialBatches });
+        await newCat.save();
+        res.status(201).json({ message: 'Category added successfully', category: newCat });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+app.delete('/api/admin/categories/:name', verifyEducator, async (req, res) => {
+    try {
+        const { name } = req.params;
+        if (['Both', 'MRB', 'AIAPGET', 'Crash Course'].includes(name)) {
+            return res.status(400).json({ message: 'Default categories cannot be deleted' });
+        }
+        await Category.findOneAndDelete({ name });
+        res.json({ message: 'Category deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
 });
 
 // Admin Review Endpoints
@@ -501,7 +694,8 @@ app.post('/api/admin/question-banks', verifyEducator, upload.any(), async (req, 
             filenames: filenames,
             questions: questions,
             questionsCount: questionsCount || req.body.questionsCount || 0,
-            category: Array.isArray(req.body.category) ? req.body.category : (typeof req.body.category === 'string' ? req.body.category.split(',') : ['Both']),
+            category: Array.isArray(req.body.category) ? req.body.category : (typeof req.body.category === 'string' ? req.body.category.split(',').map(s => s.trim()).filter(Boolean) : ['Both']),
+            batches: Array.isArray(req.body.batches) ? req.body.batches : (typeof req.body.batches === 'string' && req.body.batches ? req.body.batches.split(',').map(s => s.trim()).filter(Boolean) : (req.body.batch ? [req.body.batch] : ['All'])),
             negativeMarking: req.body.negativeMarking === 'true' || req.body.negativeMarking === true,
             duration: req.body.duration ? parseInt(req.body.duration) : 60,
             status: req.body.status || 'published',
@@ -570,6 +764,92 @@ app.patch('/api/admin/question-banks/:id/status', verifyEducator, async (req, re
     }
 });
 
+// Duplicate Question Bank (Question Paper)
+app.post('/api/admin/question-banks/:id/duplicate', verifyEducator, async (req, res) => {
+    try {
+        const originalBank = await QuestionBank.findById(req.params.id);
+        if (!originalBank) {
+            return res.status(404).json({ message: 'Question paper not found' });
+        }
+
+        // Helper to copy files if exists
+        const fileMap = {};
+        const copyFileIfExists = (oldFilename) => {
+            if (!oldFilename) return null;
+            if (fileMap[oldFilename]) return fileMap[oldFilename];
+            const oldPath = path.join(uploadDir, oldFilename);
+            if (!fs.existsSync(oldPath)) return oldFilename;
+            const ext = path.extname(oldFilename);
+            const newFilename = `qb-${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`;
+            const newPath = path.join(uploadDir, newFilename);
+            try {
+                fs.copyFileSync(oldPath, newPath);
+                fileMap[oldFilename] = newFilename;
+                return newFilename;
+            } catch (e) {
+                console.error("Failed to copy file:", e);
+                return oldFilename;
+            }
+        };
+
+        // Clone questions deep copy
+        const clonedQuestions = (originalBank.questions || []).map(q => {
+            const newFilename = q.filename ? copyFileIfExists(q.filename) : undefined;
+            return {
+                question: q.question,
+                options: Array.isArray(q.options) ? [...q.options] : [],
+                answer: typeof q.answer === 'number' ? q.answer : 0,
+                ...(newFilename ? { filename: newFilename } : {})
+            };
+        });
+
+        // Clone filenames
+        let clonedFilenames = [];
+        if (originalBank.filenames && originalBank.filenames.length > 0) {
+            clonedFilenames = originalBank.filenames.map(f => copyFileIfExists(f)).filter(Boolean);
+        }
+        const clonedPrimaryFilename = originalBank.filename ? copyFileIfExists(originalBank.filename) : (clonedFilenames[0] || null);
+
+        const newTitle = (req.body.title && req.body.title.trim()) ? req.body.title.trim() : `${originalBank.title} (Copy)`;
+
+        const duplicatedBank = new QuestionBank({
+            title: newTitle,
+            difficulty: originalBank.difficulty || 'Medium',
+            category: originalBank.category || ['Both'],
+            batches: originalBank.batches || ['All'],
+            duration: originalBank.duration || 60,
+            negativeMarking: originalBank.negativeMarking || false,
+            status: req.body.status || originalBank.status || 'draft',
+            filename: clonedPrimaryFilename,
+            filenames: clonedFilenames,
+            questions: clonedQuestions,
+            questionsCount: clonedQuestions.length,
+            attempts: 0
+        });
+
+        await duplicatedBank.save();
+        console.log(`[DUPLICATE] Created duplicated paper: ${duplicatedBank._id} ("${duplicatedBank.title}") from ${originalBank._id}`);
+        res.status(201).json({
+            message: 'Question paper duplicated successfully',
+            bank: duplicatedBank
+        });
+    } catch (err) {
+        console.error("Duplicate question bank error:", err);
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Get single Question Bank
+app.get('/api/admin/question-banks/:id', verifyEducator, async (req, res) => {
+    try {
+        const bank = await QuestionBank.findById(req.params.id);
+        if (!bank) return res.status(404).json({ message: 'Question paper not found' });
+        res.json(bank);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
 app.put('/api/admin/question-banks/:id', verifyEducator, upload.any(), async (req, res) => {
     try {
         const { title, subject, difficulty, category } = req.body;
@@ -579,7 +859,10 @@ app.put('/api/admin/question-banks/:id', verifyEducator, upload.any(), async (re
         // Update metadata
         if (title) bank.title = title;
         if (difficulty) bank.difficulty = difficulty;
-        if (category) bank.category = Array.isArray(category) ? category : (typeof category === 'string' ? category.split(',') : category);
+        if (category) bank.category = Array.isArray(category) ? category : (typeof category === 'string' ? category.split(',').map(s => s.trim()).filter(Boolean) : category);
+        if (req.body.batches !== undefined) {
+            bank.batches = Array.isArray(req.body.batches) ? req.body.batches : (typeof req.body.batches === 'string' && req.body.batches ? req.body.batches.split(',').map(s => s.trim()).filter(Boolean) : (req.body.batch ? [req.body.batch] : ['All']));
+        }
         if (req.body.negativeMarking !== undefined) {
             bank.negativeMarking = req.body.negativeMarking === 'true' || req.body.negativeMarking === true;
         }
@@ -650,7 +933,7 @@ app.put('/api/admin/question-banks/:id', verifyEducator, upload.any(), async (re
     } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-app.get('/api/admin/question-banks/:id/download', verifyAdmin, async (req, res) => {
+app.get('/api/admin/question-banks/:id/download', verifyEducator, async (req, res) => {
     try {
         console.log(`[DEBUG] Download request for bank ID: ${req.params.id}`);
         const bank = await QuestionBank.findById(req.params.id);
@@ -696,11 +979,28 @@ app.get('/api/user/tests', verifyToken, async (req, res) => {
 
         const requests = await ReAttemptRequest.find({ userId: req.user.id });
 
-        const tests = await QuestionBank.find({
-            status: 'published',
+        const catFilter = {
             $or: [
                 { category: 'Both' },
                 { category: user.category }
+            ]
+        };
+
+        const userBatch = user.batch || 'All';
+        const batchConditions = [
+            { batches: { $exists: false } },
+            { batches: { $size: 0 } },
+            { batches: 'All' }
+        ];
+        if (userBatch && userBatch !== 'All') {
+            batchConditions.push({ batches: userBatch });
+        }
+
+        const tests = await QuestionBank.find({
+            status: 'published',
+            $and: [
+                catFilter,
+                { $or: batchConditions }
             ]
         }).select('-questions.answer');
 
@@ -813,10 +1113,231 @@ app.delete('/api/admin/reviews/:id', verifyAdmin, async (req, res) => {
     } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
+// ==========================================
+// --- VIDEO MANAGEMENT & OBJECT STORAGE ---
+// ==========================================
+
+// 1. Upload Video & Thumbnail files to storage
+app.post('/api/admin/videos/upload', verifyEducator, (req, res) => {
+    videoUpload.fields([
+        { name: 'video', maxCount: 1 },
+        { name: 'thumbnail', maxCount: 1 }
+    ])(req, res, (err) => {
+        if (err) {
+            console.error('❌ Video upload error:', err);
+            return res.status(400).json({ message: err.message || 'File upload failed' });
+        }
+
+        try {
+            const host = req.get('host');
+            const protocol = req.protocol;
+            const baseUrl = `${protocol}://${host}`;
+
+            let videoUrl = '';
+            let thumbnailUrl = '';
+            let size = 0;
+
+            if (req.files && req.files['video'] && req.files['video'][0]) {
+                const videoFile = req.files['video'][0];
+                videoUrl = `${baseUrl}/uploads/videos/${videoFile.filename}`;
+                size = videoFile.size;
+            }
+
+            if (req.files && req.files['thumbnail'] && req.files['thumbnail'][0]) {
+                const thumbFile = req.files['thumbnail'][0];
+                thumbnailUrl = `${baseUrl}/uploads/thumbnails/${thumbFile.filename}`;
+            }
+
+            res.json({
+                message: 'Upload successful',
+                videoUrl,
+                thumbnailUrl,
+                size
+            });
+        } catch (error) {
+            console.error('Error generating file URLs:', error);
+            res.status(500).json({ message: 'Failed to process uploaded files' });
+        }
+    });
+});
+
+// 2. Create Video Entry (Saves metadata to MongoDB)
+app.post('/api/admin/videos', verifyEducator, async (req, res) => {
+    try {
+        const { title, description, duration, videoUrl, thumbnail, size, category } = req.body;
+
+        if (!title || !videoUrl) {
+            return res.status(400).json({ message: 'Title and Video URL are required' });
+        }
+
+        const isLocal = videoUrl.includes('/uploads/videos/');
+
+        const newVideo = new Video({
+            title,
+            description: description || '',
+            duration: duration || '00:00',
+            videoUrl,
+            thumbnail: thumbnail || '',
+            size: Number(size) || 0,
+            category: category || 'General',
+            storageType: isLocal ? 'local' : 'object_storage',
+            uploadedBy: req.user?.id
+        });
+
+        await newVideo.save();
+        res.status(201).json({ message: 'Video registered successfully', video: newVideo });
+    } catch (err) {
+        console.error('Error creating video record:', err);
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// 3. Get All Videos (Admin)
+app.get('/api/admin/videos', verifyEducator, async (req, res) => {
+    try {
+        const { search, category } = req.query;
+        let query = {};
+
+        if (category && category !== 'All') {
+            query.category = category;
+        }
+
+        if (search) {
+            query.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const videos = await Video.find(query)
+            .sort({ createdAt: -1 })
+            .populate('uploadedBy', 'fullName email');
+
+        res.json(videos);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// 4. Get Published Videos (Student / Public feed)
+app.get('/api/videos', async (req, res) => {
+    try {
+        const { category, search } = req.query;
+        let query = { isPublished: true };
+
+        if (category && category !== 'All') {
+            if (category === 'Both' || req.query.exact === 'true') {
+                query.category = category;
+            } else {
+                query.category = { $in: [category, 'Both'] };
+            }
+        }
+
+        if (search) {
+            query.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        const videos = await Video.find(query).sort({ createdAt: -1 });
+        res.json(videos);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// 5. Get Single Video
+app.get('/api/admin/videos/:id', verifyEducator, async (req, res) => {
+    try {
+        const video = await Video.findById(req.params.id);
+        if (!video) return res.status(404).json({ message: 'Video not found' });
+        res.json(video);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// 6. Update Video
+app.put('/api/admin/videos/:id', verifyEducator, async (req, res) => {
+    try {
+        const { title, description, duration, videoUrl, thumbnail, size, category, isPublished } = req.body;
+        const video = await Video.findById(req.params.id);
+        if (!video) return res.status(404).json({ message: 'Video not found' });
+
+        if (title !== undefined) video.title = title;
+        if (description !== undefined) video.description = description;
+        if (duration !== undefined) video.duration = duration;
+        if (videoUrl !== undefined) video.videoUrl = videoUrl;
+        if (thumbnail !== undefined) video.thumbnail = thumbnail;
+        if (size !== undefined) video.size = Number(size);
+        if (category !== undefined) video.category = category;
+        if (isPublished !== undefined) video.isPublished = isPublished;
+
+        await video.save();
+        res.json({ message: 'Video updated successfully', video });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// 7. Delete Video & Cleanup Storage
+app.delete('/api/admin/videos/:id', verifyAdmin, async (req, res) => {
+    try {
+        const video = await Video.findById(req.params.id);
+        if (!video) return res.status(404).json({ message: 'Video not found' });
+
+        // Clean up local video file if stored locally
+        if (video.videoUrl && video.videoUrl.includes('/uploads/videos/')) {
+            const filename = path.basename(video.videoUrl);
+            const filePath = path.join(videoUploadDir, filename);
+            if (fs.existsSync(filePath)) {
+                try { fs.unlinkSync(filePath); } catch (e) { console.error('Error removing video file:', e); }
+            }
+        }
+
+        // Clean up local thumbnail if stored locally
+        if (video.thumbnail && video.thumbnail.includes('/uploads/thumbnails/')) {
+            const thumbName = path.basename(video.thumbnail);
+            const thumbPath = path.join(thumbUploadDir, thumbName);
+            if (fs.existsSync(thumbPath)) {
+                try { fs.unlinkSync(thumbPath); } catch (e) { console.error('Error removing thumb file:', e); }
+            }
+        }
+
+        await Video.findByIdAndDelete(req.params.id);
+        res.json({ message: 'Video deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
 app.get('/api/user/tests/:id', verifyToken, async (req, res) => {
     try {
+        const user = await User.findById(req.user.id) || await AdminUser.findById(req.user.id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
         const test = await QuestionBank.findById(req.params.id).select('-questions.answer');
         if (!test) return res.status(404).json({ message: 'Test not found' });
+
+        // Enforce category & batch isolation for students
+        if (user.role === 'student') {
+            if (test.status !== 'published') {
+                return res.status(403).json({ message: 'Test is not published' });
+            }
+            const testCats = Array.isArray(test.category) ? test.category : [test.category];
+            const hasCatAccess = testCats.includes('Both') || testCats.includes(user.category);
+            if (!hasCatAccess) {
+                return res.status(403).json({ message: 'This test is not accessible to your category' });
+            }
+            const testBatches = Array.isArray(test.batches) ? test.batches : (test.batches ? [test.batches] : []);
+            const isAllBatches = testBatches.length === 0 || testBatches.includes('All');
+            const userBatch = user.batch || 'All';
+            const hasBatchAccess = isAllBatches || (userBatch !== 'All' && testBatches.includes(userBatch));
+            if (!hasBatchAccess) {
+                return res.status(403).json({ message: 'This test is not accessible to your batch' });
+            }
+        }
 
         const attempt = await Attempt.findOne({ userId: req.user.id, testId: req.params.id });
         let request = await ReAttemptRequest.findOne({ userId: req.user.id, testId: req.params.id, status: 'approved' });
@@ -854,7 +1375,7 @@ app.post('/api/user/tests/:id/view', verifyToken, async (req, res) => {
 });
 
 // Get viewers and attemptors for a test
-app.get('/api/admin/question-banks/:id/stats', verifyAdmin, async (req, res) => {
+app.get('/api/admin/question-banks/:id/stats', verifyEducator, async (req, res) => {
     try {
         const id = req.params.id;
         // Find the bank questions too
@@ -912,8 +1433,27 @@ app.get('/api/admin/question-banks/:id/stats', verifyAdmin, async (req, res) => 
 app.post('/api/user/tests/:id/submit', verifyToken, async (req, res) => {
     try {
         const { answers } = req.body; // Array of selected option indices
+        const user = await User.findById(req.user.id) || await AdminUser.findById(req.user.id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
         const test = await QuestionBank.findById(req.params.id);
         if (!test) return res.status(404).json({ message: 'Test not found' });
+
+        // Enforce category & batch isolation for students
+        if (user.role === 'student') {
+            const testCats = Array.isArray(test.category) ? test.category : [test.category];
+            const hasCatAccess = testCats.includes('Both') || testCats.includes(user.category);
+            if (!hasCatAccess) {
+                return res.status(403).json({ message: 'This test is not accessible to your category' });
+            }
+            const testBatches = Array.isArray(test.batches) ? test.batches : (test.batches ? [test.batches] : []);
+            const isAllBatches = testBatches.length === 0 || testBatches.includes('All');
+            const userBatch = user.batch || 'All';
+            const hasBatchAccess = isAllBatches || (userBatch !== 'All' && testBatches.includes(userBatch));
+            if (!hasBatchAccess) {
+                return res.status(403).json({ message: 'This test is not accessible to your batch' });
+            }
+        }
 
         const existingAttempt = await Attempt.findOne({ userId: req.user.id, testId: req.params.id });
         const reattemptApproved = await ReAttemptRequest.findOne({ userId: req.user.id, testId: req.params.id, status: 'approved' });

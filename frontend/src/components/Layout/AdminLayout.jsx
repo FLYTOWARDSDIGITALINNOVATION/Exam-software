@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     LayoutDashboard, Users, FileText,
-    LogOut, Menu, X, MessageSquare, Star
+    LogOut, Menu, X, MessageSquare, Star, Video
 } from 'lucide-react';
 
 const AdminLayout = ({ children, activeTab, setActiveTab }) => {
@@ -138,6 +138,13 @@ const AdminLayout = ({ children, activeTab, setActiveTab }) => {
                         active={activeTab === 'Reviews'}
                         isOpen={isSidebarOpen}
                         onClick={() => handleTabClick('Reviews')}
+                    />
+                    <NavItem
+                        icon={<Video size={20} />}
+                        label="Videos"
+                        active={activeTab === 'Videos'}
+                        isOpen={isSidebarOpen}
+                        onClick={() => handleTabClick('Videos')}
                     />
                 </nav>
 

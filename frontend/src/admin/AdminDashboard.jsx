@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-    TrendingUp, Calendar, FileText, Trash2, Edit, Download, Upload, X, Check, Search, Users, Star, Eye
+    TrendingUp, Calendar, FileText, Trash2, Edit, Download, Upload, X, Check, Search, Users, Star, Eye, Copy, Plus
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useCallback } from 'react';
@@ -9,6 +9,8 @@ import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from 'recharts';
 import AdminLayout from '../components/Layout/AdminLayout';
+import EditQuestionBankModal from '../components/EditQuestionBankModal';
+import VideoManagement from './VideoManagement';
 const API_URL = process.env.REACT_APP_API_URL || (window.location.hostname === 'localhost' ? 'http://localhost:5000' : "https://jclsiddhaacademy.in");
 
 const AdminDashboard = () => {
@@ -26,6 +28,7 @@ const AdminDashboard = () => {
     const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
     const [editingBank, setEditingBank] = useState(null);
     const [selectedStudent, setSelectedStudent] = useState(null);
+    const [editingStudent, setEditingStudent] = useState(null);
     const [reattemptRequests, setReattemptRequests] = useState([]);
     const [pendingRegistrations, setPendingRegistrations] = useState([]);
     const [requestType, setRequestType] = useState('registration'); // 'registration' or 'reattempt'
@@ -38,9 +41,25 @@ const AdminDashboard = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [studentSearchQuery, setStudentSearchQuery] = useState('');
     const [selectedVaultCategory, setSelectedVaultCategory] = useState(null);
+    const [selectedVaultBatch, setSelectedVaultBatch] = useState('All');
+    const [categories, setCategories] = useState([
+        { name: 'Both', batches: [] },
+        { name: 'MRB', batches: [] },
+        { name: 'AIAPGET', batches: [] },
+        { name: 'Crash Course', batches: [] }
+    ]);
+    const [showAddBatchModal, setShowAddBatchModal] = useState(false);
+    const [targetCategoryForBatch, setTargetCategoryForBatch] = useState(null);
+    const [newBatchName, setNewBatchName] = useState('');
+    const [batchLoading, setBatchLoading] = useState(false);
 
     const navigate = useNavigate();
 
+    const getCatName = (cat) => typeof cat === 'string' ? cat : (cat?.name || '');
+    const getCatBatches = (catName) => {
+        const found = categories.find(c => getCatName(c) === catName);
+        return (found && typeof found === 'object' && Array.isArray(found.batches)) ? found.batches : [];
+    };
 
     const fetchAllData = useCallback(async () => {
         try {
@@ -48,37 +67,94 @@ const AdminDashboard = () => {
             const config = { headers: { Authorization: `Bearer ${token}` } };
 
             const [
-                statsResponse,
-                usersResponse,
-                qbResponse,
+                statsRes,
+                usersRes,
+                qbRes,
                 reRes,
                 pendingRegRes,
-                reviewsRes
-            ] = await Promise.all([
+                reviewsRes,
+                catRes
+            ] = await Promise.allSettled([
                 axios.get(`${API_URL}/api/admin/dashboard-stats`, config),
                 axios.get(`${API_URL}/api/admin/users`, config),
                 axios.get(`${API_URL}/api/admin/question-banks`, config),
                 axios.get(`${API_URL}/api/admin/reattempt-requests`, config),
                 axios.get(`${API_URL}/api/admin/pending-registrations`, config),
-                axios.get(`${API_URL}/api/admin/reviews`, config)
+                axios.get(`${API_URL}/api/admin/reviews`, config),
+                axios.get(`${API_URL}/api/categories`)
             ]);
 
-            setStats(statsResponse.data.stats);
-            setChartData(statsResponse.data.charts);
-            setUsers(usersResponse.data);
-            setQuestionBanks(qbResponse.data);
-            setReattemptRequests(reRes.data);
-            setPendingRegistrations(pendingRegRes.data);
-            setReviews(reviewsRes.data);
+            if (statsRes.status === 'fulfilled') {
+                setStats(statsRes.value.data.stats);
+                setChartData(statsRes.value.data.charts);
+            }
+            if (usersRes.status === 'fulfilled') setUsers(usersRes.value.data);
+            if (qbRes.status === 'fulfilled') setQuestionBanks(qbRes.value.data);
+            if (reRes.status === 'fulfilled') setReattemptRequests(reRes.value.data);
+            if (pendingRegRes.status === 'fulfilled') setPendingRegistrations(pendingRegRes.value.data);
+            if (reviewsRes.status === 'fulfilled') setReviews(reviewsRes.value.data);
+            if (catRes.status === 'fulfilled' && Array.isArray(catRes.value.data) && catRes.value.data.length > 0) {
+                setCategories(catRes.value.data);
+            }
 
         } catch (err) {
-            console.log("Using mock data as backend failed or unauthorized", err);
-            if (err.response && (err.response.status === 401 || err.response.status === 403)) {
+            console.log("Fetch failed or unauthorized", err);
+            if (err.response && err.response.status === 401) {
                 localStorage.removeItem('token');
                 navigate('/login');
             }
         }
     }, [navigate]);
+
+    const handleAddBatch = async (e) => {
+        e.preventDefault();
+        const cat = targetCategoryForBatch || selectedVaultCategory;
+        if (!cat) {
+            alert('Please select a category first');
+            return;
+        }
+        if (!newBatchName.trim()) return;
+        setBatchLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            await axios.post(`${API_URL}/api/admin/categories/${encodeURIComponent(cat)}/batches`, { batchName: newBatchName.trim() }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            alert(`Batch "${newBatchName.trim()}" added to ${cat} successfully!`);
+            setNewBatchName('');
+            setShowAddBatchModal(false);
+            setTargetCategoryForBatch(null);
+            fetchAllData();
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to add batch');
+        } finally {
+            setBatchLoading(false);
+        }
+    };
+
+    const handleDeleteBatch = async (catName, batchName) => {
+        if (!window.confirm(`Are you sure you want to delete batch "${batchName}" from ${catName}? Tests assigned to this batch will still exist.`)) return;
+        try {
+            const token = localStorage.getItem('token');
+            await axios.delete(`${API_URL}/api/admin/categories/${encodeURIComponent(catName)}/batches/${encodeURIComponent(batchName)}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (selectedVaultBatch === batchName) setSelectedVaultBatch('All');
+            fetchAllData();
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to delete batch');
+        }
+    };
+
+    const getCategoryStyle = (name) => {
+        switch (name) {
+            case 'Both': return { icon: '📚', bg: 'bg-teal-50', border: 'border-teal-200', badge: 'bg-teal-100 text-teal-700', hover: 'hover:border-teal-400 hover:shadow-teal-100' };
+            case 'MRB': return { icon: '🏥', bg: 'bg-orange-50', border: 'border-orange-200', badge: 'bg-orange-100 text-orange-700', hover: 'hover:border-orange-400 hover:shadow-orange-100' };
+            case 'AIAPGET': return { icon: '🎓', bg: 'bg-indigo-50', border: 'border-indigo-200', badge: 'bg-indigo-100 text-indigo-700', hover: 'hover:border-indigo-400 hover:shadow-indigo-100' };
+            case 'Crash Course': return { icon: '⚡', bg: 'bg-rose-50', border: 'border-rose-200', badge: 'bg-rose-100 text-rose-700', hover: 'hover:border-rose-400 hover:shadow-rose-100' };
+            default: return { icon: '👥', bg: 'bg-purple-50', border: 'border-purple-200', badge: 'bg-purple-100 text-purple-700', hover: 'hover:border-purple-400 hover:shadow-purple-100' };
+        }
+    };
 
     const fetchBankStats = async (bankId) => {
         setLoadingStats(true);
@@ -225,6 +301,29 @@ const AdminDashboard = () => {
         }
     };
 
+    const handleDuplicate = async (bank) => {
+        const customTitle = window.prompt(`Duplicate question paper "${bank.title}"? Enter title for new paper:`, `${bank.title} (Copy)`);
+        if (customTitle === null) return;
+
+        try {
+            const token = localStorage.getItem('token');
+            const res = await axios.post(
+                `${API_URL}/api/admin/question-banks/${bank._id}/duplicate`,
+                { title: customTitle.trim() || `${bank.title} (Copy)` },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            alert('Question paper duplicated successfully! Opening editor for the duplicated paper...');
+            await fetchAllData();
+            if (res.data?.bank) {
+                setEditingBank(res.data.bank);
+            }
+        } catch (err) {
+            console.error("Duplicate failed", err);
+            const msg = err.response?.data?.message || err.message;
+            alert(`Failed to duplicate: ${msg}`);
+        }
+    };
+
     const handleDownload = async (bank) => {
         try {
             const token = localStorage.getItem('token');
@@ -355,8 +454,17 @@ const AdminDashboard = () => {
         const titleMatch = bank.title.toLowerCase().includes(searchQuery.toLowerCase());
         if (!selectedVaultCategory) return titleMatch;
         const cats = Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : ['Both']);
-        if (selectedVaultCategory === 'Both') return titleMatch && (cats.includes('Both') || cats.length === 0);
-        return titleMatch && (cats.includes(selectedVaultCategory) || cats.includes('Both'));
+        const categoryMatch = selectedVaultCategory === 'Both' 
+            ? (cats.includes('Both') || cats.length === 0)
+            : (cats.includes(selectedVaultCategory) || cats.includes('Both'));
+        if (!categoryMatch) return false;
+
+        if (selectedVaultBatch && selectedVaultBatch !== 'All') {
+            const batches = Array.isArray(bank.batches) ? bank.batches : (bank.batches ? [bank.batches] : []);
+            const batchMatch = batches.includes(selectedVaultBatch);
+            return titleMatch && batchMatch;
+        }
+        return titleMatch;
     }).sort((a, b) => (a.title || "").localeCompare(b.title || ""));
 
     const filteredStudents = users.filter(u => 
@@ -407,6 +515,12 @@ return (
                         <>
                             <h2 className="text-4xl font-serif font-bold text-[#0F172A] mb-2">Review Management</h2>
                             <p className="text-slate-500">Moderate and approve student testimonials</p>
+                        </>
+                    )}
+                    {activeTab === 'Videos' && (
+                        <>
+                            <h2 className="text-4xl font-serif font-bold text-[#0F172A] mb-2">Video Library & Storage</h2>
+                            <p className="text-slate-500">Upload, stream, and manage lecture videos and Object Storage media</p>
                         </>
                     )}
                 </div>
@@ -475,34 +589,48 @@ return (
                     {!selectedVaultCategory ? (
                         /* ── CATEGORY LANDING GRID ── */
                         <div>
-                            <p className="text-slate-500 mb-6 text-sm">Select a category to view and manage its tests.</p>
+                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6">
+                                <div>
+                                    <p className="text-slate-500 text-sm">Select a category to view its batches and tests.</p>
+                                    <p className="text-[11px] text-slate-400 mt-0.5">Tests set for a specific batch are visible ONLY to students of that batch.</p>
+                                </div>
+                            </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                                {[
-                                    { name: 'Both', color: 'teal', bg: 'bg-teal-50', border: 'border-teal-200', badge: 'bg-teal-100 text-teal-700', hover: 'hover:border-teal-400 hover:shadow-teal-100', icon: '📚' },
-                                    { name: 'MRB', color: 'orange', bg: 'bg-orange-50', border: 'border-orange-200', badge: 'bg-orange-100 text-orange-700', hover: 'hover:border-orange-400 hover:shadow-orange-100', icon: '🏥' },
-                                    { name: 'AIAPGET', color: 'indigo', bg: 'bg-indigo-50', border: 'border-indigo-200', badge: 'bg-indigo-100 text-indigo-700', hover: 'hover:border-indigo-400 hover:shadow-indigo-100', icon: '🎓' },
-                                    { name: 'Crash Course', color: 'rose', bg: 'bg-rose-50', border: 'border-rose-200', badge: 'bg-rose-100 text-rose-700', hover: 'hover:border-rose-400 hover:shadow-rose-100', icon: '⚡' },
-                                ].map(({ name, bg, border, badge, hover, icon }) => {
+                                {categories.map((catObj) => {
+                                    const name = getCatName(catObj);
+                                    const batches = getCatBatches(name);
+                                    const { icon, bg, border, badge, hover } = getCategoryStyle(name);
                                     const count = questionBanks.filter(b => {
                                         const cats = Array.isArray(b.category) ? b.category : (b.category ? [b.category] : ['Both']);
                                         if (name === 'Both') return cats.includes('Both') || cats.length === 0;
                                         return cats.includes(name) || cats.includes('Both');
                                     }).length;
+
                                     return (
-                                        <button
+                                        <div
                                             key={name}
-                                            onClick={() => { setSelectedVaultCategory(name); setSearchQuery(''); }}
-                                            className={`group text-left p-6 rounded-2xl border-2 ${bg} ${border} ${hover} shadow-sm hover:shadow-lg transition-all duration-200 cursor-pointer`}
+                                            onClick={() => { setSelectedVaultCategory(name); setSelectedVaultBatch('All'); setSearchQuery(''); }}
+                                            className={`group relative text-left p-6 rounded-2xl border-2 ${bg} ${border} ${hover} shadow-sm hover:shadow-lg transition-all duration-200 cursor-pointer flex flex-col justify-between`}
                                         >
-                                            <div className="text-3xl mb-3">{icon}</div>
-                                            <h3 className="text-lg font-bold text-slate-800 mb-1">{name}</h3>
-                                            <div className="flex items-center justify-between mt-3">
+                                            <div>
+                                                <div className="flex justify-between items-start mb-3">
+                                                    <div className="text-3xl">{icon}</div>
+                                                    <span className="text-[10px] font-bold text-slate-500 bg-white/80 px-2.5 py-0.5 rounded-full border border-slate-200/60 shadow-xs">
+                                                        {batches.length} {batches.length === 1 ? 'batch' : 'batches'}
+                                                    </span>
+                                                </div>
+                                                <h3 className="text-lg font-bold text-slate-800 mb-1">{name}</h3>
+                                                <p className="text-xs text-slate-500 font-medium line-clamp-1">
+                                                    {batches.length > 0 ? batches.join(', ') : 'All Batches'}
+                                                </p>
+                                            </div>
+                                            <div className="flex items-center justify-between mt-5 pt-3 border-t border-slate-200/50">
                                                 <span className={`text-[11px] font-black uppercase px-2.5 py-1 rounded-full ${badge}`}>
                                                     {count} {count === 1 ? 'test' : 'tests'}
                                                 </span>
                                                 <span className="text-slate-400 group-hover:translate-x-1 transition-transform text-lg">→</span>
                                             </div>
-                                        </button>
+                                        </div>
                                     );
                                 })}
                             </div>
@@ -511,12 +639,12 @@ return (
                         /* ── CATEGORY DETAIL VIEW ── */
                         <div>
                             {/* Breadcrumb + back */}
-                            <div className="flex items-center gap-2 mb-6">
+                            <div className="flex items-center gap-2 mb-4">
                                 <button
-                                    onClick={() => { setSelectedVaultCategory(null); setSearchQuery(''); }}
+                                    onClick={() => { setSelectedVaultCategory(null); setSelectedVaultBatch('All'); setSearchQuery(''); }}
                                     className="flex items-center gap-1.5 text-slate-500 hover:text-slate-800 text-sm font-medium transition-colors"
                                 >
-                                    ← Back
+                                    ← All Categories
                                 </button>
                                 <span className="text-slate-300">/</span>
                                 <span className={`text-[11px] font-black uppercase px-2.5 py-1 rounded-full ${
@@ -525,6 +653,84 @@ return (
                                     selectedVaultCategory === 'Crash Course' ? 'bg-rose-100 text-rose-700' :
                                     'bg-teal-100 text-teal-700'
                                 }`}>{selectedVaultCategory}</span>
+                            </div>
+
+                            {/* Batches bar inside selected category */}
+                            <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm mb-6">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                                    <div>
+                                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-600 flex items-center gap-2">
+                                            <span>Batches in {selectedVaultCategory}</span>
+                                            <span className="text-[10px] font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded-full border border-teal-200">
+                                                {getCatBatches(selectedVaultCategory).length} Batches
+                                            </span>
+                                        </h4>
+                                        <p className="text-[11px] text-slate-400 mt-0.5">
+                                            Tests set for a specific batch are visible ONLY to students of that batch.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setTargetCategoryForBatch(selectedVaultCategory);
+                                            setNewBatchName('');
+                                            setShowAddBatchModal(true);
+                                        }}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer whitespace-nowrap self-start sm:self-auto"
+                                    >
+                                        <Plus size={14} /> + Add Batch to {selectedVaultCategory}
+                                    </button>
+                                </div>
+
+                                {/* Batch pills */}
+                                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedVaultBatch('All')}
+                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                            selectedVaultBatch === 'All'
+                                                ? 'bg-[#0F172A] text-white shadow-sm'
+                                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                        }`}
+                                    >
+                                        All Batches
+                                    </button>
+                                    {getCatBatches(selectedVaultCategory).map(bName => {
+                                        const bCount = questionBanks.filter(b => {
+                                            const cats = Array.isArray(b.category) ? b.category : (b.category ? [b.category] : ['Both']);
+                                            if (!cats.includes(selectedVaultCategory) && !cats.includes('Both')) return false;
+                                            const bArr = Array.isArray(b.batches) ? b.batches : (b.batches ? [b.batches] : []);
+                                            return bArr.includes(bName);
+                                        }).length;
+                                        return (
+                                            <div key={bName} className="flex items-center bg-slate-100 rounded-lg p-0.5">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setSelectedVaultBatch(bName)}
+                                                    className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 ${
+                                                        selectedVaultBatch === bName
+                                                            ? 'bg-teal-700 text-white shadow-sm'
+                                                            : 'text-slate-700 hover:bg-slate-200'
+                                                    }`}
+                                                >
+                                                    <span>{bName}</span>
+                                                    <span className="text-[10px] opacity-75">({bCount})</span>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleDeleteBatch(selectedVaultCategory, bName)}
+                                                    className="p-1 text-slate-400 hover:text-red-500 rounded hover:bg-white transition"
+                                                    title={`Delete batch "${bName}" from ${selectedVaultCategory}`}
+                                                >
+                                                    <X size={12} />
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                    {getCatBatches(selectedVaultCategory).length === 0 && (
+                                        <span className="text-xs text-slate-400 italic">No custom batches yet in {selectedVaultCategory}. Click "+ Add Batch" above.</span>
+                                    )}
+                                </div>
                             </div>
 
                             {/* Search */}
@@ -555,6 +761,11 @@ return (
                                                     {(Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : ['Both'])).map((cat, idx) => (
                                                         <span key={idx} className={`text-[10px] px-2 py-0.5 rounded-full font-black tracking-wider ${cat === 'AIAPGET' ? 'bg-indigo-100 text-indigo-700' : cat === 'MRB' ? 'bg-orange-100 text-orange-700' : cat === 'Crash Course' ? 'bg-rose-100 text-rose-700' : 'bg-teal-100 text-teal-700'}`}>
                                                             {cat}
+                                                        </span>
+                                                    ))}
+                                                    {(Array.isArray(bank.batches) ? bank.batches : (bank.batches ? [bank.batches] : ['All'])).map((b, bIdx) => (
+                                                        <span key={`b-${bIdx}`} className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                                            Batch: {b}
                                                         </span>
                                                     ))}
                                                 </div>
@@ -590,6 +801,7 @@ return (
                                                         <Eye size={18} />
                                                     </button>
                                                     <button onClick={() => handleDownload(bank)} className="p-2 text-slate-400 hover:text-teal-600 transition-colors" title="Download"><Download size={18} /></button>
+                                                    <button onClick={() => handleDuplicate(bank)} className="p-2 text-slate-400 hover:text-purple-600 transition-colors" title="Duplicate Question Paper"><Copy size={18} /></button>
                                                     <button onClick={() => setEditingBank(bank)} className="p-2 text-slate-400 hover:text-blue-600 transition-colors" title="Edit"><Edit size={18} /></button>
                                                     <button onClick={() => handleDelete(bank._id)} className="p-2 text-slate-400 hover:text-red-600 transition-colors" title="Delete"><Trash2 size={18} /></button>
                                                 </div>
@@ -631,6 +843,7 @@ return (
                                 <thead className="bg-slate-50 text-xs font-bold text-slate-500 uppercase tracking-wider">
                                     <tr>
                                         <th className="px-6 py-4">Student</th>
+                                        <th className="px-6 py-4 text-center">Course</th>
                                         <th className="px-6 py-4 text-center">Tests</th>
                                         <th className="px-6 py-4 text-center">Avg Score</th>
                                         <th className="px-6 py-4 text-center">Trend</th>
@@ -647,6 +860,25 @@ return (
                                                     <p className="text-slate-400 text-xs">{user.email}</p>
                                                 </div>
                                             </td>
+                                            <td className="px-6 py-4 text-center">
+                                                <div className="flex flex-col items-center gap-1">
+                                                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-black tracking-wider ${
+                                                        user.category === 'AIAPGET' ? 'bg-indigo-100 text-indigo-700' :
+                                                        user.category === 'Crash Course' ? 'bg-rose-100 text-rose-700' :
+                                                        user.category === 'Both' ? 'bg-teal-100 text-teal-700' :
+                                                        'bg-orange-100 text-orange-700'
+                                                    }`}>
+                                                        {user.category || 'Both'}
+                                                    </span>
+                                                    {user.batch && user.batch !== 'All' ? (
+                                                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                                            {user.batch}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-[9px] font-semibold text-slate-400">All Batches</span>
+                                                    )}
+                                                </div>
+                                            </td>
                                             <td className="px-6 py-4 text-center font-medium">{user.testsCompleted || 0}</td>
                                             <td className="px-6 py-4 text-center">
                                                 <span className="bg-teal-100 text-teal-700 px-2 py-1 rounded font-bold text-xs">{user.averageScore || '-'}%</span>
@@ -658,7 +890,10 @@ return (
                                                 {user.lastActive ? new Date(user.lastActive).toLocaleDateString() : 'Never'}
                                             </td>
                                             <td className="px-6 py-4 text-right">
-                                                <div className="flex justify-end gap-2">
+                                                <div className="flex justify-end items-center gap-3">
+                                                    <button onClick={() => setEditingStudent(user)} className="text-teal-600 font-bold hover:underline text-xs flex items-center gap-1">
+                                                        <Edit size={13} /> Edit
+                                                    </button>
                                                     <button onClick={() => setSelectedStudent(user)} className="text-blue-600 font-bold hover:underline text-xs">View</button>
                                                     <button onClick={() => handleDeleteStudent(user._id)} className="text-red-600 font-bold hover:underline text-xs">Delete</button>
                                                 </div>
@@ -667,7 +902,7 @@ return (
                                     ))}
                                     {filteredStudents.length === 0 && (
                                         <tr>
-                                            <td colSpan="6" className="text-center py-8 text-slate-400">
+                                            <td colSpan="7" className="text-center py-8 text-slate-400">
                                                 No students found. (Total Users fetched: {users.length})
                                             </td>
                                         </tr>
@@ -686,9 +921,19 @@ return (
                                                 <p className="font-bold text-slate-900">{user.fullName}</p>
                                                 <p className="text-slate-400 text-xs">{user.email}</p>
                                             </div>
-                                            <span className="text-[10px] text-slate-500">
-                                                {user.lastActive ? new Date(user.lastActive).toLocaleDateString() : 'Never'}
-                                            </span>
+                                            <div className="flex flex-col items-end gap-1">
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-black tracking-wider ${
+                                                    user.category === 'AIAPGET' ? 'bg-indigo-100 text-indigo-700' :
+                                                    user.category === 'Crash Course' ? 'bg-rose-100 text-rose-700' :
+                                                    user.category === 'Both' ? 'bg-teal-100 text-teal-700' :
+                                                    'bg-orange-100 text-orange-700'
+                                                }`}>
+                                                    {user.category || 'Both'}
+                                                </span>
+                                                <span className="text-[10px] text-slate-500">
+                                                    {user.lastActive ? new Date(user.lastActive).toLocaleDateString() : 'Never'}
+                                                </span>
+                                            </div>
                                         </div>
 
                                         <div className="flex flex-wrap gap-2 text-xs font-medium">
@@ -706,7 +951,10 @@ return (
                                             </div>
                                         </div>
 
-                                        <div className="flex justify-end gap-3 pt-2 border-t border-slate-50">
+                                        <div className="flex justify-end items-center gap-3 pt-2 border-t border-slate-50">
+                                            <button onClick={() => setEditingStudent(user)} className="text-teal-600 font-bold hover:underline text-xs p-1 flex items-center gap-1">
+                                                <Edit size={13} /> Edit Course
+                                            </button>
                                             <button onClick={() => setSelectedStudent(user)} className="text-blue-600 font-bold hover:underline text-xs p-1">View Details</button>
                                             <button onClick={() => handleDeleteStudent(user._id)} className="text-red-600 font-bold hover:underline text-xs p-1">Delete</button>
                                         </div>
@@ -1061,6 +1309,11 @@ return (
                 </div>
             )}
 
+            {/* CONTENT: VIDEOS */}
+            {activeTab === 'Videos' && (
+                <VideoManagement API_URL={API_URL} />
+            )}
+
 
 
 
@@ -1071,20 +1324,100 @@ return (
                     onSuccess={handleUploadSuccess}
                     onAuthError={handleLogout}
                     defaultCategory={selectedVaultCategory}
+                    categories={categories}
                 />
             )}
             {editingBank && (
-                <EditModal
+                <EditQuestionBankModal
                     bank={editingBank}
                     onClose={() => setEditingBank(null)}
                     onSuccess={handleUploadSuccess}
+                    categories={categories}
                 />
             )}
             {selectedStudent && (
                 <StudentDetailsModal
                     student={selectedStudent}
                     onClose={() => setSelectedStudent(null)}
+                    onEdit={(student) => setEditingStudent(student)}
                 />
+            )}
+            {editingStudent && (
+                <EditStudentModal
+                    student={editingStudent}
+                    categories={categories}
+                    onClose={() => setEditingStudent(null)}
+                    onSuccess={() => {
+                        setEditingStudent(null);
+                        fetchAllData();
+                    }}
+                />
+            )}
+            {showAddBatchModal && (
+                <div className="fixed inset-0 bg-black/60 z-[90] flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 relative animate-in zoom-in duration-200">
+                        <button
+                            onClick={() => setShowAddBatchModal(false)}
+                            className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-slate-100 text-slate-400"
+                        >
+                            <X size={18} />
+                        </button>
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
+                                <Plus size={20} />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-slate-800 text-base">
+                                    Add Batch to {targetCategoryForBatch || selectedVaultCategory}
+                                </h3>
+                                <p className="text-[11px] text-slate-400">Tests set for this batch will be visible only to its students.</p>
+                            </div>
+                        </div>
+                        <form onSubmit={handleAddBatch} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                    Category
+                                </label>
+                                <input
+                                    type="text"
+                                    disabled
+                                    value={targetCategoryForBatch || selectedVaultCategory || ''}
+                                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-100 text-slate-700 text-sm font-bold cursor-not-allowed"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                    New Batch Name
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    placeholder="e.g. Batch 3, 2025 Batch, Morning Batch"
+                                    value={newBatchName}
+                                    onChange={(e) => setNewBatchName(e.target.value)}
+                                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-sm font-medium"
+                                    autoFocus
+                                />
+                            </div>
+                            <div className="flex gap-2 pt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddBatchModal(false)}
+                                    className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-xs hover:bg-slate-50 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={batchLoading || !newBatchName.trim()}
+                                    className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shadow-md shadow-teal-700/20 disabled:opacity-50 transition-all"
+                                >
+                                    {batchLoading ? 'Creating...' : 'Create Batch'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             )}
             {statsBank && (
                 <QuestionBankStatsModal
@@ -1116,7 +1449,7 @@ const OverviewCard = ({ icon, value, label }) => (
     </div>
 );
 
-const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory }) => {
+const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory, categories = ['Both', 'MRB', 'AIAPGET', 'Crash Course'] }) => {
     const DRAFT_KEY = 'questionbank_draft';
 
     const getSavedDraft = () => {
@@ -1128,20 +1461,31 @@ const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory }) => {
 
     const draft = getSavedDraft();
 
+    const getCatName = (cat) => typeof cat === 'string' ? cat : (cat?.name || '');
+    const getCatBatches = (catName) => {
+        const found = categories.find(c => getCatName(c) === catName);
+        return (found && typeof found === 'object' && Array.isArray(found.batches)) ? found.batches : [];
+    };
+
     const [formData, setFormData] = useState(draft?.formData || {
         title: '',
         difficulty: 'Easy',
         category: defaultCategory ? [defaultCategory] : ['Both'],
+        batches: ['All'],
         negativeMarking: false,
         duration: 60,
         status: 'published'
     });
+
+    const activeSelectedCats = Array.isArray(formData.category) ? formData.category : [formData.category];
+    const availableBatchesForSelection = Array.from(new Set(
+        activeSelectedCats.flatMap(cat => getCatBatches(cat))
+    ));
     const [questions, setQuestions] = useState(draft?.questions || [
-        { question: '', options: ['', '', '', ''], answer: 0 }
+        { question: '', options: ['', '', '', ''], answer: null }
     ]);
     const [loading, setLoading] = useState(false);
     const [autoSaveStatus, setAutoSaveStatus] = useState(draft ? `Restored draft from ${new Date(draft.savedAt).toLocaleTimeString()}` : 'Auto-save ON');
-    const [autoSaveEnabled] = useState(true);
 
     // Auto-save to localStorage every 30s and on change
     const saveDraft = React.useCallback(() => {
@@ -1171,7 +1515,7 @@ const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory }) => {
 
 
     const handleAddQuestion = () => {
-        setQuestions([...questions, { question: '', options: ['', '', '', ''], answer: 0, image: null, imagePreview: null }]);
+        setQuestions([...questions, { question: '', options: ['', '', '', ''], answer: null, image: null, imagePreview: null }]);
     };
 
     const handleRemoveQuestion = (index) => {
@@ -1198,6 +1542,10 @@ const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory }) => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (questions.length === 0) return alert('Please add at least one question');
+        const missingAnswerIdx = questions.findIndex(q => q.answer === null || q.answer === undefined || q.answer === '');
+        if (missingAnswerIdx !== -1) {
+            return alert(`Please select the correct option for Question ${missingAnswerIdx + 1}`);
+        }
 
         setLoading(true);
         const data = new FormData();
@@ -1252,12 +1600,19 @@ const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory }) => {
         const updatedStatus = forceStatus || formData.status;
 
         if (questions.length === 0) return alert('Please add at least one question');
+        if (updatedStatus === 'published') {
+            const missingAnswerIdx = questions.findIndex(q => q.answer === null || q.answer === undefined || q.answer === '');
+            if (missingAnswerIdx !== -1) {
+                return alert(`Please select the correct option for Question ${missingAnswerIdx + 1}`);
+            }
+        }
 
         setLoading(true);
         const data = new FormData();
         data.append('title', formData.title);
         data.append('difficulty', formData.difficulty);
-        data.append('category', formData.category);
+        data.append('category', Array.isArray(formData.category) ? formData.category.join(',') : formData.category);
+        data.append('batches', Array.isArray(formData.batches) ? formData.batches.join(',') : (formData.batches || 'All'));
         data.append('negativeMarking', formData.negativeMarking);
         data.append('duration', formData.duration);
         data.append('status', updatedStatus);
@@ -1345,33 +1700,83 @@ const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory }) => {
                             <div>
                                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Category</label>
                                 <div className="flex flex-wrap gap-x-4 gap-y-2 mt-1">
-                                    {['Both', 'MRB', 'AIAPGET', 'Crash Course'].map(cat => (
-                                        <label key={cat} className="flex items-center gap-1.5 cursor-pointer">
+                                    {categories.map(cat => {
+                                        const catName = getCatName(cat);
+                                        return (
+                                            <label key={catName} className="flex items-center gap-1.5 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    name="upload-category"
+                                                    value={catName}
+                                                    checked={Array.isArray(formData.category) ? formData.category.includes(catName) : formData.category === catName}
+                                                    onChange={e => {
+                                                        const checked = e.target.checked;
+                                                        let newCats = Array.isArray(formData.category) ? [...formData.category] : [formData.category];
+                                                        if (checked) {
+                                                            if (catName === 'Both') newCats = ['Both'];
+                                                            else {
+                                                                newCats = newCats.filter(c => c !== 'Both');
+                                                                if (!newCats.includes(catName)) newCats.push(catName);
+                                                            }
+                                                        } else {
+                                                            newCats = newCats.filter(c => c !== catName);
+                                                            if (newCats.length === 0) newCats = ['Both'];
+                                                        }
+                                                        setFormData({ ...formData, category: newCats, batches: ['All'] });
+                                                    }}
+                                                    className="w-4 h-4 accent-[#C2410C] rounded"
+                                                />
+                                                <span className="text-sm font-medium text-slate-700">{catName}</span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Batches Selection for selected categories */}
+                            <div className="md:col-span-2 lg:col-span-4 bg-slate-100/80 p-3 rounded-xl border border-slate-200">
+                                <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                                    Target Batches (Tests will be visible ONLY to selected batches)
+                                </label>
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                                    <label className="flex items-center gap-1.5 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={formData.batches?.includes('All')}
+                                            onChange={e => {
+                                                if (e.target.checked) {
+                                                    setFormData({ ...formData, batches: ['All'] });
+                                                } else {
+                                                    setFormData({ ...formData, batches: [] });
+                                                }
+                                            }}
+                                            className="w-4 h-4 accent-teal-600 rounded"
+                                        />
+                                        <span className="text-xs font-bold text-slate-800">All Batches</span>
+                                    </label>
+                                    {availableBatchesForSelection.map(bName => (
+                                        <label key={bName} className="flex items-center gap-1.5 cursor-pointer">
                                             <input
                                                 type="checkbox"
-                                                name="upload-category"
-                                                value={cat}
-                                                checked={Array.isArray(formData.category) ? formData.category.includes(cat) : formData.category === cat}
+                                                checked={!formData.batches?.includes('All') && formData.batches?.includes(bName)}
                                                 onChange={e => {
-                                                    const checked = e.target.checked;
-                                                    let newCats = Array.isArray(formData.category) ? [...formData.category] : [formData.category];
-                                                    if (checked) {
-                                                        if (cat === 'Both') newCats = ['Both'];
-                                                        else {
-                                                            newCats = newCats.filter(c => c !== 'Both');
-                                                            if (!newCats.includes(cat)) newCats.push(cat);
-                                                        }
+                                                    let cur = formData.batches?.filter(b => b !== 'All') || [];
+                                                    if (e.target.checked) {
+                                                        cur = [...cur, bName];
                                                     } else {
-                                                        newCats = newCats.filter(c => c !== cat);
-                                                        if (newCats.length === 0) newCats = ['Both'];
+                                                        cur = cur.filter(b => b !== bName);
                                                     }
-                                                    setFormData({ ...formData, category: newCats });
+                                                    if (cur.length === 0) cur = ['All'];
+                                                    setFormData({ ...formData, batches: cur });
                                                 }}
-                                                className="w-4 h-4 accent-[#C2410C] rounded"
+                                                className="w-4 h-4 accent-teal-600 rounded"
                                             />
-                                            <span className="text-sm font-medium text-slate-700">{cat}</span>
+                                            <span className="text-xs font-medium text-slate-700">{bName}</span>
                                         </label>
                                     ))}
+                                    {availableBatchesForSelection.length === 0 && (
+                                        <span className="text-xs text-slate-400 italic">No custom batches yet in this category. Test will be available to All Batches.</span>
+                                    )}
                                 </div>
                             </div>
                             <div>
@@ -1511,6 +1916,7 @@ const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory }) => {
     );
 };
 
+// eslint-disable-next-line no-unused-vars
 const EditModal = ({ bank, onClose, onSuccess }) => {
     const [formData, setFormData] = useState({
         title: bank.title,
@@ -1524,6 +1930,7 @@ const EditModal = ({ bank, onClose, onSuccess }) => {
     const [questions, setQuestions] = useState(
         (bank.questions || []).map((q) => ({
             ...q,
+            answer: typeof q.answer === 'number' ? q.answer : (q.answer !== undefined && q.answer !== null && q.answer !== '' ? Number(q.answer) : null),
             imagePreview: q.filename ? `${API_URL}/uploads/${q.filename}` : null
         }))
     );
@@ -1570,7 +1977,7 @@ const EditModal = ({ bank, onClose, onSuccess }) => {
     }, [formData, questions]);
 
     const handleAddQuestion = () => {
-        setQuestions([...questions, { question: '', options: ['', '', '', ''], answer: 0 }]);
+        setQuestions([...questions, { question: '', options: ['', '', '', ''], answer: null }]);
     };
 
     const handleRemoveQuestion = (index) => {
@@ -1597,6 +2004,10 @@ const EditModal = ({ bank, onClose, onSuccess }) => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        const missingAnswerIdx = questions.findIndex(q => q.answer === null || q.answer === undefined || q.answer === '');
+        if (missingAnswerIdx !== -1) {
+            return alert(`Please select the correct option for Question ${missingAnswerIdx + 1}`);
+        }
         setLoading(true);
 
         const data = new FormData();
@@ -1845,7 +2256,7 @@ const EditModal = ({ bank, onClose, onSuccess }) => {
     );
 };
 
-const StudentDetailsModal = ({ student, onClose }) => {
+const StudentDetailsModal = ({ student, onClose, onEdit }) => {
     if (!student) return null;
     return (
         <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
@@ -1936,7 +2347,191 @@ const StudentDetailsModal = ({ student, onClose }) => {
                             {student.createdAt ? new Date(student.createdAt).toLocaleDateString() : 'N/A'}
                         </span>
                     </div>
+
+                    <div className="pt-2">
+                        <button
+                            onClick={() => {
+                                onClose();
+                                if (onEdit) onEdit(student);
+                            }}
+                            className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-2 transition-colors shadow-sm"
+                        >
+                            <Edit size={14} /> Edit Course / Student Details
+                        </button>
+                    </div>
                 </div>
+            </div>
+        </div>
+    );
+};
+
+const EditStudentModal = ({ student, categories = [], onClose, onSuccess }) => {
+    const getCatName = (cat) => typeof cat === 'string' ? cat : (cat?.name || '');
+    const getCatBatches = (catName) => {
+        const found = categories.find(c => getCatName(c) === catName);
+        return (found && typeof found === 'object' && Array.isArray(found.batches)) ? found.batches : [];
+    };
+
+    const defaultCats = ['Both', 'MRB', 'AIAPGET', 'Crash Course'];
+    const availableCategories = Array.from(new Set([
+        ...categories.map(getCatName),
+        ...defaultCats,
+        student.category
+    ].filter(Boolean)));
+
+    const [formData, setFormData] = useState({
+        fullName: student.fullName || '',
+        category: student.category || 'MRB',
+        batch: student.batch || 'All',
+        regNo: student.regNo || '',
+        status: student.status || 'approved'
+    });
+    const [loading, setLoading] = useState(false);
+
+    const availableBatches = getCatBatches(formData.category);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            const studentId = student._id || student.id;
+            await axios.put(`${API_URL}/api/admin/users/${studentId}`, formData, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            alert('Student course/details updated successfully!');
+            onSuccess();
+        } catch (err) {
+            console.error(err);
+            alert('Update failed: ' + (err.response?.data?.message || err.message));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/60 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl p-6 relative animate-in zoom-in duration-200">
+                <button
+                    onClick={onClose}
+                    className="absolute top-4 right-4 p-2 rounded-full hover:bg-slate-100 transition-colors text-slate-400 hover:text-slate-600"
+                >
+                    <X size={20} />
+                </button>
+
+                <div className="flex items-center gap-3 mb-6 pb-4 border-b border-slate-100">
+                    <div className="w-12 h-12 bg-teal-50 text-teal-700 rounded-xl flex items-center justify-center text-xl font-bold">
+                        <Edit size={22} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-serif font-bold text-slate-800">Edit Student / Batch</h3>
+                        <p className="text-xs text-slate-400 break-all">{student.email}</p>
+                    </div>
+                </div>
+
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                            Full Name
+                        </label>
+                        <input
+                            type="text"
+                            required
+                            value={formData.fullName}
+                            onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-sm font-medium"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                            Category
+                        </label>
+                        <select
+                            value={formData.category}
+                            onChange={(e) => {
+                                const newCat = e.target.value;
+                                setFormData({ ...formData, category: newCat, batch: 'All' });
+                            }}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-sm font-semibold bg-white text-slate-800"
+                        >
+                            {availableCategories.map((cat) => (
+                                <option key={cat} value={cat}>
+                                    {cat === 'Both' ? 'Both (All Access)' : cat}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                            Target Batch inside {formData.category}
+                        </label>
+                        <select
+                            value={formData.batch}
+                            onChange={(e) => setFormData({ ...formData, batch: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-sm font-semibold bg-white text-slate-800"
+                        >
+                            <option value="All">All Batches (Standard)</option>
+                            {availableBatches.map((b) => (
+                                <option key={b} value={b}>
+                                    {b}
+                                </option>
+                            ))}
+                            {formData.batch && formData.batch !== 'All' && !availableBatches.includes(formData.batch) && (
+                                <option value={formData.batch}>{formData.batch}</option>
+                            )}
+                        </select>
+                        <p className="text-[11px] text-slate-400 mt-1">
+                            This student will ONLY see tests published for this specific batch or All Batches.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                            Register Number
+                        </label>
+                        <input
+                            type="text"
+                            value={formData.regNo}
+                            onChange={(e) => setFormData({ ...formData, regNo: e.target.value })}
+                            placeholder="e.g. REG-2024-001"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-sm"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                            Account Status
+                        </label>
+                        <select
+                            value={formData.status}
+                            onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-teal-500/20 text-sm font-medium bg-white text-slate-800"
+                        >
+                            <option value="approved">Approved</option>
+                            <option value="pending">Pending</option>
+                            <option value="rejected">Rejected</option>
+                        </select>
+                    </div>
+
+                    <div className="pt-4 flex gap-3">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="flex-1 py-2.5 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 text-sm transition-colors"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            className="flex-1 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-sm shadow-lg shadow-teal-700/20 transition-all disabled:opacity-70 flex items-center justify-center gap-2"
+                        >
+                            {loading ? 'Saving...' : 'Save Changes'}
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     );

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Save, Hash, AlertTriangle, Wand2, Check, Loader2, BookOpen } from 'lucide-react';
@@ -10,12 +10,23 @@ const CreateTest = () => {
     const navigate = useNavigate();
     const [step, setStep] = useState(1);
     const [loading, setLoading] = useState(false);
+    const [categories, setCategories] = useState([]);
     const [formData, setFormData] = useState({
         topic: '',
         questionCount: '',
+        category: 'MRB',
+        batches: ['All'],
         negativeMarking: false
     });
     const [questions, setQuestions] = useState([]);
+
+    useEffect(() => {
+        axios.get(`${process.env.REACT_APP_API_URL || "https://jclsiddhaacademy.in"}/api/categories`)
+            .then(res => {
+                if (Array.isArray(res.data)) setCategories(res.data);
+            })
+            .catch(() => {});
+    }, []);
 
 
     const handleChange = (e) => {
@@ -52,7 +63,6 @@ const CreateTest = () => {
             // Simple mock logic based on topic keywords
             let qText = `Question ${i + 1} regarding ${topic}`;
             let options = ["Option A", "Option B", "Option C", "Option D"];
-            let answer = Math.floor(Math.random() * 4);
 
             if (topic.toLowerCase().includes('noi')) {
                 qText = `Identify the symptom associated with ${topic} - Case ${i + 1}`;
@@ -66,7 +76,7 @@ const CreateTest = () => {
                 id: Date.now() + i,
                 question: qText,
                 options: options,
-                correctAnswer: answer
+                correctAnswer: null
             };
         });
 
@@ -77,11 +87,18 @@ const CreateTest = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        const missingAnswerIdx = questions.findIndex(q => q.correctAnswer === null || q.correctAnswer === undefined || q.correctAnswer === '');
+        if (missingAnswerIdx !== -1) {
+            alert(`Please select the correct option for Question ${missingAnswerIdx + 1}`);
+            return;
+        }
         try {
             const token = localStorage.getItem('token');
             const payload = {
                 title: formData.topic || "Untitled Assessment",
                 difficulty: 'Medium',
+                category: formData.category ? [formData.category] : ['MRB'],
+                batches: formData.batches || ['All'],
                 negativeMarking: formData.negativeMarking,
                 questionsCount: questions.length,
                 manualQuestions: JSON.stringify(questions.map(q => ({
@@ -154,6 +171,55 @@ const CreateTest = () => {
                             />
 
 
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Target Category</label>
+                                    <select
+                                        name="category"
+                                        value={formData.category}
+                                        onChange={(e) => {
+                                            setFormData(prev => ({
+                                                ...prev,
+                                                category: e.target.value,
+                                                batches: ['All']
+                                            }));
+                                        }}
+                                        className="w-full p-3.5 rounded-xl border border-gray-200 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#0F172A]/20"
+                                    >
+                                        {categories.length > 0 ? (
+                                            categories.map(c => (
+                                                <option key={c.name} value={c.name}>{c.name}</option>
+                                            ))
+                                        ) : (
+                                            <>
+                                                <option value="MRB">MRB</option>
+                                                <option value="AIAPGET">AIAPGET</option>
+                                                <option value="Crash Course">Crash Course</option>
+                                                <option value="Both">Both</option>
+                                            </>
+                                        )}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Target Batch</label>
+                                    <select
+                                        value={formData.batches?.[0] || 'All'}
+                                        onChange={(e) => {
+                                            setFormData(prev => ({
+                                                ...prev,
+                                                batches: [e.target.value]
+                                            }));
+                                        }}
+                                        className="w-full p-3.5 rounded-xl border border-gray-200 bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#0F172A]/20"
+                                    >
+                                        <option value="All">All Batches (Open to everyone in {formData.category})</option>
+                                        {(categories.find(c => c.name === formData.category)?.batches || []).map(b => (
+                                            <option key={b} value={b}>{b} (Only {b} students)</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
 
                             <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
                                 <div className="flex items-center gap-3">

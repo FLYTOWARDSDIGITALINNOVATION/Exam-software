@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -16,10 +16,47 @@ const steps = [
 
 const StudentRegister = () => {
     const [currentStep, setCurrentStep] = useState(1);
+    const [categoriesData, setCategoriesData] = useState([
+        { name: 'MRB', batches: ['Batch 1', 'Batch 2'] },
+        { name: 'AIAPGET', batches: ['Batch 1', 'Batch 2'] },
+        { name: 'Crash Course', batches: ['Batch 1'] }
+    ]);
     const [formData, setFormData] = useState({
-        category: 'MRB'
+        category: 'MRB',
+        batch: 'Batch 1'
     });
     const navigate = useNavigate();
+
+    const getCatName = (c) => typeof c === 'string' ? c : (c?.name || '');
+
+    useEffect(() => {
+        const apiUrl = process.env.REACT_APP_API_URL || (window.location.hostname === 'localhost' ? 'http://localhost:5000' : "https://jclsiddhaacademy.in");
+        axios.get(`${apiUrl}/api/categories`)
+            .then(res => {
+                const data = res.data;
+                const list = Array.isArray(data) ? data : (data?.categories || []);
+                if (list.length > 0) {
+                    const filtered = list.filter(c => (typeof c === 'string' ? c : c.name) !== 'Both');
+                    setCategoriesData(filtered);
+                    const firstCat = filtered[0];
+                    const firstCatName = typeof firstCat === 'string' ? firstCat : firstCat.name;
+                    const firstCatBatches = (typeof firstCat === 'object' && Array.isArray(firstCat.batches) && firstCat.batches.length > 0) ? firstCat.batches : ['All'];
+                    setFormData(prev => ({
+                        ...prev,
+                        category: prev.category || firstCatName,
+                        batch: prev.batch || firstCatBatches[0]
+                    }));
+                }
+            })
+            .catch(() => {});
+    }, []);
+
+    const currentCatBatches = () => {
+        const found = categoriesData.find(c => getCatName(c) === formData.category);
+        return (found && typeof found === 'object' && Array.isArray(found.batches) && found.batches.length > 0)
+            ? found.batches
+            : ['All'];
+    };
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -88,8 +125,25 @@ const StudentRegister = () => {
                             <Input label="UG College Name" name="ugCollege" placeholder="Your College Name" onChange={handleChange} />
                             <Input label="UG College Academic Year" name="ugYear" placeholder="2018-2023" onChange={handleChange} />
                             <Input label="PG College Name" name="pgCollege" placeholder="Government Siddha Medical College" onChange={handleChange} />
-                            <Input label="PG Academic Year" name="pgYear" placeholder="2024-2027" onChange={handleChange} />
-                            <Select label="Registered Category" name="category" options={["MRB", "AIAPGET", "Crash Course"]} value={formData.category} onChange={handleChange} />
+                            <Select
+                                label="Target Category"
+                                name="category"
+                                options={categoriesData.map(getCatName)}
+                                value={formData.category}
+                                onChange={(e) => {
+                                    const newCat = e.target.value;
+                                    const found = categoriesData.find(c => getCatName(c) === newCat);
+                                    const bList = (found && typeof found === 'object' && Array.isArray(found.batches) && found.batches.length > 0) ? found.batches : ['All'];
+                                    setFormData({ ...formData, category: newCat, batch: bList[0] || 'All' });
+                                }}
+                            />
+                            <Select
+                                label={`Assigned Batch (${formData.category})`}
+                                name="batch"
+                                options={currentCatBatches()}
+                                value={formData.batch}
+                                onChange={handleChange}
+                            />
                             <Input label="Register Number" name="regNo" placeholder="REG-2024-001" onChange={handleChange} required />
                         </div>
                     </div>

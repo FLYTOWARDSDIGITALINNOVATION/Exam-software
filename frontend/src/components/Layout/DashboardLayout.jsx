@@ -3,7 +3,7 @@ import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     LayoutDashboard, LineChart, User,
-    LogOut, Menu, X
+    LogOut, Menu, X, FileText, Video
 } from 'lucide-react';
 
 const DashboardLayout = ({ children }) => {
@@ -106,6 +106,15 @@ const DashboardLayout = ({ children }) => {
                 {/* NAVIGATION */}
                 <nav className="flex-1 mt-20 lg:mt-4 px-4 space-y-3">
                     <NavItem icon={<LayoutDashboard size={20} />} label="Dashboard" active={location.pathname === '/dashboard'} isOpen={isSidebarOpen} onClick={() => navigate('/dashboard')} />
+                    <NavItem icon={<Video size={20} />} label="Video Classes" active={location.pathname === '/videos'} isOpen={isSidebarOpen} onClick={() => navigate('/videos')} />
+                    {(() => {
+                        let currentUser = null;
+                        try { currentUser = JSON.parse(localStorage.getItem('user') || '{}'); } catch(e) {}
+                        if (currentUser?.role === 'faculty' || currentUser?.role === 'admin') {
+                            return <NavItem icon={<FileText size={20} />} label="Question Vault" active={location.pathname === '/admin'} isOpen={isSidebarOpen} onClick={() => navigate('/admin')} />;
+                        }
+                        return null;
+                    })()}
                     <NavItem icon={<LineChart size={20} />} label="Progress" active={location.pathname === '/progresspage'} isOpen={isSidebarOpen} onClick={() => navigate('/progresspage')} />
                     <NavItem icon={<User size={20} />} label="Profile" active={location.pathname === '/profilepage'} isOpen={isSidebarOpen} onClick={() => navigate('/profilepage')} />
                 </nav>

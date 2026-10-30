@@ -14,6 +14,7 @@ import Home from './pages/Home';
 import StudentHome from './pages/StudentHome';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import StudentVideosPage from './pages/StudentVideosPage';
 
 function App() {
   return (
@@ -33,6 +34,7 @@ function App() {
 
         {/* Protected Dashboard Route */}
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/videos" element={<StudentVideosPage />} />
         <Route path="/create-test" element={<CreateTest />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/profilepage" element={<ProfilePage />} />
