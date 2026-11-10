@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    Play, Search, Film, Clock, Video as VideoIcon, X, Sparkles, ChevronRight, RefreshCw
+    Play, Search, Film, Clock, Video as VideoIcon, X, Sparkles, ChevronRight, RefreshCw, Lock
 } from 'lucide-react';
 import DashboardLayout from '../components/Layout/DashboardLayout';
 
@@ -15,23 +15,55 @@ export default function StudentVideosPage() {
     const [loading, setLoading] = useState(true);
     const [activeVideo, setActiveVideo] = useState(null);
     const [userCategory, setUserCategory] = useState('');
+    const [allowedCategories, setAllowedCategories] = useState([]);
 
-    // Fetch user info from localStorage or profile
+    // Fetch user info from localStorage
     useEffect(() => {
-        try {
-            const storedUser = localStorage.getItem('user');
-            if (storedUser) {
-                const parsed = JSON.parse(storedUser);
-                if (parsed.category) {
-                    setUserCategory(parsed.category);
+        const syncStudentCategory = async () => {
+            try {
+                const storedUser = localStorage.getItem('user');
+                let parsedUser = {};
+                if (storedUser) {
+                    parsedUser = JSON.parse(storedUser);
                 }
+
+                if (parsedUser.category) {
+                    setUserCategory(parsedUser.category);
+                    if (parsedUser.category !== 'Both' && parsedUser.category !== 'All') {
+                        setAllowedCategories([parsedUser.category, 'Both']);
+                    } else {
+                        setAllowedCategories([]);
+                    }
+                    return;
+                }
+
+                const token = localStorage.getItem('token');
+                if (!token) return;
+
+                const res = await fetch(`${API_URL}/api/user/profile`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    const profile = await res.json();
+                    const category = profile?.category || 'Both';
+                    setUserCategory(category);
+                    if (category !== 'Both' && category !== 'All') {
+                        setAllowedCategories([category, 'Both']);
+                    } else {
+                        setAllowedCategories([]);
+                    }
+                    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+                    localStorage.setItem('user', JSON.stringify({ ...currentUser, category, batch: profile?.batch || currentUser.batch || 'All' }));
+                }
+            } catch (e) {
+                console.error('Error reading user category:', e);
             }
-        } catch (e) {
-            console.error('Error reading user category:', e);
-        }
+        };
+
+        syncStudentCategory();
     }, []);
 
-    // Fetch categories
+    // Fetch categories (for filter UI)
     useEffect(() => {
         const fetchCategories = async () => {
             try {
@@ -52,12 +84,14 @@ export default function StudentVideosPage() {
         fetchCategories();
     }, []);
 
-    // Fetch videos
+    // Fetch videos — always send token so backend can enforce category restriction
     const fetchVideos = useCallback(async () => {
         setLoading(true);
         try {
             const token = localStorage.getItem('token');
             const url = new URL(`${API_URL}/api/videos`);
+
+            // Only apply category filter if it's within the student's allowed scope
             if (selectedCategory !== 'All') {
                 url.searchParams.set('category', selectedCategory);
             }
@@ -89,6 +123,12 @@ export default function StudentVideosPage() {
         fetchVideos();
     };
 
+    // Returns true if a category tab should be shown to this student
+    const isCategoryAllowed = (cat) => {
+        if (allowedCategories.length === 0) return true; // all categories allowed
+        return allowedCategories.includes(cat);
+    };
+
     const getCategoryBadgeClass = (cat) => {
         switch (cat) {
             case 'MRB':
@@ -104,6 +144,8 @@ export default function StudentVideosPage() {
         }
     };
 
+    const visibleCategories = categories.filter(isCategoryAllowed);
+
     return (
         <DashboardLayout>
             <div className="p-4 md:p-8 lg:p-12 max-w-7xl mx-auto space-y-8">
@@ -118,26 +160,34 @@ export default function StudentVideosPage() {
                                 <Sparkles size={14} /> Video Learning Center
                             </div>
                             <h1 className="text-2xl md:text-4xl font-serif font-bold text-white tracking-tight">
-                                Recorded Classes & Video Lectures
+                                Recorded Classes &amp; Video Lectures
                             </h1>
                             <p className="text-slate-300 text-sm md:text-base leading-relaxed">
                                 Watch in-depth subject lectures, high-yield topic discussions, and exam revisions by our expert faculty.
                             </p>
                             {userCategory && (
-                                <div className="pt-2 flex items-center gap-2">
-                                    <span className="text-xs text-slate-400 font-medium">Your Enrolled Stream:</span>
-                                    <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30">
-                                        {userCategory}
-                                    </span>
+                                <div className="pt-2 flex flex-wrap items-center gap-3">
+                                    <div className="flex items-center gap-2 px-3 py-1.5 bg-orange-500/20 border border-orange-500/30 rounded-xl">
+                                        <Lock size={12} className="text-orange-300" />
+                                        <span className="text-xs text-slate-300 font-medium">Your Stream:</span>
+                                        <span className="text-xs font-bold text-orange-300">
+                                            {userCategory}
+                                        </span>
+                                    </div>
+                                    {userCategory !== 'Both' && userCategory !== 'All' && (
+                                        <span className="text-[11px] text-slate-400 italic">
+                                            Showing videos for your enrolled category
+                                        </span>
+                                    )}
                                 </div>
                             )}
                         </div>
 
                         <div className="flex flex-col sm:flex-row md:flex-col gap-3 shrink-0">
                             <div className="bg-white/5 border border-white/10 backdrop-blur-md p-4 rounded-2xl text-center">
-                                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Total Available</p>
+                                <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Available</p>
                                 <p className="text-3xl font-extrabold text-white mt-1">{videos.length}</p>
-                                <p className="text-[11px] text-emerald-400 font-semibold mt-0.5">Classes & Discussions</p>
+                                <p className="text-[11px] text-emerald-400 font-semibold mt-0.5">Classes &amp; Discussions</p>
                             </div>
                         </div>
                     </div>
@@ -181,37 +231,39 @@ export default function StudentVideosPage() {
                         </div>
                     </div>
 
-                    {/* Category Filter Pills */}
-                    <div className="pt-2 border-t border-slate-100 flex items-center gap-2 overflow-x-auto pb-1">
-                        <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-1 shrink-0">
-                            Category:
-                        </span>
-                        <button
-                            type="button"
-                            onClick={() => setSelectedCategory('All')}
-                            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-                                selectedCategory === 'All'
-                                    ? 'bg-[#0F172A] text-white shadow-md'
-                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                            }`}
-                        >
-                            All Categories
-                        </button>
-                        {categories.map((cat) => (
+                    {/* Category Filter Pills - only show categories the student is allowed to see */}
+                    {visibleCategories.length > 1 && (
+                        <div className="pt-2 border-t border-slate-100 flex items-center gap-2 overflow-x-auto pb-1">
+                            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-1 shrink-0">
+                                Category:
+                            </span>
                             <button
-                                key={cat}
                                 type="button"
-                                onClick={() => setSelectedCategory(cat)}
+                                onClick={() => setSelectedCategory('All')}
                                 className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-                                    selectedCategory === cat
-                                        ? 'bg-blue-900 text-white shadow-md'
+                                    selectedCategory === 'All'
+                                        ? 'bg-[#0F172A] text-white shadow-md'
                                         : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                                 }`}
                             >
-                                {cat}
+                                All
                             </button>
-                        ))}
-                    </div>
+                            {visibleCategories.map((cat) => (
+                                <button
+                                    key={cat}
+                                    type="button"
+                                    onClick={() => setSelectedCategory(cat)}
+                                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
+                                        selectedCategory === cat
+                                            ? 'bg-blue-900 text-white shadow-md'
+                                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                >
+                                    {cat}
+                                </button>
+                            ))}
+                        </div>
+                    )}
                 </div>
 
                 {/* VIDEOS GRID */}
@@ -229,7 +281,7 @@ export default function StudentVideosPage() {
                         <p className="text-sm text-slate-500 max-w-md mx-auto">
                             {selectedCategory !== 'All' || searchQuery
                                 ? `No recorded classes found matching "${searchQuery || selectedCategory}". Try selecting another category or resetting filters.`
-                                : 'There are currently no recorded lectures published. Please check back later.'}
+                                : 'There are currently no recorded lectures published for your enrolled stream. Please check back later.'}
                         </p>
                         {(selectedCategory !== 'All' || searchQuery) && (
                             <button
@@ -239,7 +291,7 @@ export default function StudentVideosPage() {
                                 }}
                                 className="px-5 py-2.5 bg-blue-900 hover:bg-blue-800 text-white rounded-xl text-xs font-bold transition-all shadow-md inline-flex items-center gap-2"
                             >
-                                View All Categories
+                                View All My Categories
                             </button>
                         )}
                     </div>
@@ -283,7 +335,7 @@ export default function StudentVideosPage() {
                                     </div>
 
                                     {/* Duration Badge */}
-                                    {vid.duration && (
+                                    {vid.duration && vid.duration !== '00:00' && (
                                         <div className="absolute bottom-3 right-3 bg-black/80 backdrop-blur-xs text-white text-[11px] font-mono font-bold px-2 py-0.5 rounded-md flex items-center gap-1 shadow-sm">
                                             <Clock size={11} /> {vid.duration}
                                         </div>
@@ -307,7 +359,6 @@ export default function StudentVideosPage() {
                                         <span className="text-[11px] text-slate-400 font-medium">
                                             {vid.createdAt ? new Date(vid.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Lecture'}
                                         </span>
-
                                         <button
                                             type="button"
                                             onClick={(e) => {
@@ -347,9 +398,9 @@ export default function StudentVideosPage() {
                                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${getCategoryBadgeClass(activeVideo.category)}`}>
                                                 {activeVideo.category || 'General'}
                                             </span>
-                                            {activeVideo.duration && (
-                                                <span className="text-[11px] text-slate-400 font-mono">
-                                                    Duration: {activeVideo.duration}
+                                            {activeVideo.duration && activeVideo.duration !== '00:00' && (
+                                                <span className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
+                                                    <Clock size={11} /> {activeVideo.duration}
                                                 </span>
                                             )}
                                         </div>

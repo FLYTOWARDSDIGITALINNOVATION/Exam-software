@@ -7,6 +7,7 @@ import {
   BookOpen, Hash, Award
 } from 'lucide-react';
 import DashboardLayout from '../components/Layout/DashboardLayout';
+import { getDisplayCourse } from '../utils/courseDisplay';
 
 
 const ProfilePage = () => {
@@ -26,6 +27,9 @@ const ProfilePage = () => {
     course: "",      // Matches Schema
     role: ""         // Matches Schema
   });
+
+  const profileCourseText = formData.course ? formData.course : "BSMS";
+  const profileStudentTag = formData.studentId ? ` • ${formData.studentId}` : "";
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -47,6 +51,7 @@ const ProfilePage = () => {
         if (!response.ok) throw new Error('Failed to fetch profile');
 
         const data = await response.json();
+        const displayCourse = getDisplayCourse(data);
 
         // MAPPING: Populate state with data from your MongoDB User model
         setFormData({
@@ -54,10 +59,10 @@ const ProfilePage = () => {
           email: data.email || "",
           mobile: data.mobile || "", // Uses 'mobile' from schema
           address: data.address || "",
-          bio: data.expertise || data.bio || "Siddha Practitioner",
-          studentId: data.studentId || "SV-Pending",
-          regNo: data.regNo || "Not Assigned",
-          course: data.course || "BSMS",
+          bio: data.expertise || data.bio || "",
+          studentId: data.studentId || "",
+          regNo: data.regNo || "",
+          course: displayCourse,
           role: data.role || "student"
         });
       } catch (err) {
@@ -133,7 +138,7 @@ const ProfilePage = () => {
 
               <div className="flex-1">
                 <h2 className="text-2xl lg:text-3xl font-serif font-bold text-slate-900">{formData.fullName}</h2>
-                <p className="text-teal-600 font-medium text-sm lg:text-base">{formData.course} • {formData.studentId}</p>
+                <p className="text-teal-600 font-medium text-sm lg:text-base">{profileCourseText}{profileStudentTag}</p>
               </div>
 
               <button
@@ -164,11 +169,12 @@ const ProfilePage = () => {
                       name="bio"
                       value={formData.bio}
                       onChange={handleChange}
+                      placeholder="Add your professional bio"
                       className="w-full p-5 rounded-2xl border-2 border-slate-100 outline-none h-32 resize-none transition-all font-medium text-slate-700"
                     />
                   ) : (
-                    <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 italic text-slate-600 leading-relaxed">
-                      "{formData.bio}"
+                    <div className="p-6 bg-slate-50 rounded-2xl border border-slate-100 text-slate-600 leading-relaxed">
+                      {formData.bio ? `"${formData.bio}"` : "—"}
                     </div>
                   )}
                 </div>

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import DashboardLayout from '../components/Layout/DashboardLayout';
 import EditQuestionBankModal from '../components/EditQuestionBankModal';
+import { getDisplayCourse } from '../utils/courseDisplay';
 
 const API_URL = process.env.REACT_APP_API_URL || (window.location.hostname === 'localhost' ? 'http://localhost:5000' : "https://jclsiddhaacademy.in");
 
@@ -164,7 +165,7 @@ const Dashboard = () => {
     { label: "Tests Completed", value: user.testsCompleted || "0", sub: "Keep going!", icon: BookOpen, color: "text-blue-900", bg: "bg-blue-50", category: "Overall" },
     { label: "Average Score", value: `${user.averageScore || 0}%`, sub: "View Details", icon: Award, color: "text-orange-600", bg: "bg-orange-50", category: "Performance", link: "/progresspage" },
     { label: "Day Streak", value: "7", sub: "Keep it up! 🔥", icon: Flame, color: "text-red-600", bg: "bg-red-50", category: "Current" },
-    { label: "Role", value: (user.role || 'Student').toUpperCase(), sub: user.course || "BSMS", icon: User, color: "text-blue-600", bg: "bg-blue-50", category: "Account" },
+    { label: "Role", value: (user.role || 'Student').toUpperCase(), sub: getDisplayCourse(user), icon: User, color: "text-blue-600", bg: "bg-blue-50", category: "Account" },
   ];
 
   // Filter by user's category and batch (defense-in-depth isolation)

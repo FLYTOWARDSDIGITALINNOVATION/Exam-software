@@ -8,6 +8,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { isVideoVisibleToStudent } = require('./videoAccess');
 
 dotenv.config();
 
@@ -311,15 +312,25 @@ app.post('/api/auth/register', async (req, res) => {
         }
         await newUser.save();
 
+        const userPayload = {
+            id: newUser._id,
+            email: newUser.email,
+            role: newUser.role,
+            fullName: newUser.fullName,
+            category: newUser.category || 'Both',
+            batch: newUser.batch || 'All'
+        };
+
         if (status === 'pending') {
             return res.status(201).json({
                 message: 'Registration successful. Please wait for admin approval before logging in.',
-                status: 'pending'
+                status: 'pending',
+                user: userPayload
             });
         }
 
         const token = jwt.sign({ id: newUser._id, role: newUser.role }, JWT_SECRET, { expiresIn: '1d' });
-        res.status(201).json({ token, user: { id: newUser._id, email: newUser.email, role: newUser.role, fullName: newUser.fullName } });
+        res.status(201).json({ token, user: userPayload });
     } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
@@ -361,7 +372,15 @@ app.post('/api/auth/login', async (req, res) => {
         await user.save();
 
         const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '1d' });
-        res.json({ token, user: { id: user._id, email: user.email, role: user.role, fullName: user.fullName } });
+        const userPayload = {
+            id: user._id,
+            email: user.email,
+            role: user.role,
+            fullName: user.fullName,
+            category: user.category || 'Both',
+            batch: user.batch || 'All'
+        };
+        res.json({ token, user: userPayload });
     } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
@@ -590,7 +609,19 @@ app.delete('/api/admin/categories/:name', verifyEducator, async (req, res) => {
         if (['Both', 'MRB', 'AIAPGET', 'Crash Course'].includes(name)) {
             return res.status(400).json({ message: 'Default categories cannot be deleted' });
         }
+
         await Category.findOneAndDelete({ name });
+
+        await QuestionBank.updateMany(
+            { category: { $in: [name] } },
+            { $pull: { category: name } }
+        );
+
+        await QuestionBank.updateMany(
+            { category: { $exists: true, $size: 0 } },
+            { $set: { category: ['Both'] } }
+        );
+
         res.json({ message: 'Category deleted successfully' });
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -1219,15 +1250,45 @@ app.get('/api/admin/videos', verifyEducator, async (req, res) => {
     }
 });
 
-// 4. Get Published Videos (Student / Public feed)
+// 4. Get Published Videos (Student feed - category restricted)
 app.get('/api/videos', async (req, res) => {
     try {
         const { category, search } = req.query;
         let query = { isPublished: true };
 
+        // Fetch user info from token (if provided) to enforce student category restriction
+        let userCategory = null;
+        const authHeader = req.headers['authorization'];
+        const token = authHeader && authHeader.split(' ')[1];
+
+        if (token) {
+            try {
+                const decoded = jwt.verify(token, JWT_SECRET);
+                if (decoded && decoded.id) {
+                    // Only apply restrictions if the user is a student
+                    const dbUser = await User.findById(decoded.id).select('category role');
+                    if (dbUser && dbUser.role === 'student' && dbUser.category) {
+                        userCategory = dbUser.category;
+                    }
+                }
+            } catch (e) {
+                // Ignore token error and proceed with public/default query
+            }
+        }
+
+        // Enforce category restriction based on the student's enrolled category
+        if (userCategory && userCategory !== 'Both' && userCategory !== 'All') {
+            query.category = { $in: [userCategory, 'Both'] };
+        }
+
+        // Allow further filtering if student explicitly selects a category from UI
+        // but only within their allowed scope
         if (category && category !== 'All') {
-            if (category === 'Both' || req.query.exact === 'true') {
-                query.category = category;
+            if (userCategory && userCategory !== 'Both' && userCategory !== 'All') {
+                const normalizedRequestedCategory = String(category).trim();
+                if (isVideoVisibleToStudent(userCategory, normalizedRequestedCategory)) {
+                    query.category = normalizedRequestedCategory;
+                }
             } else {
                 query.category = { $in: [category, 'Both'] };
             }

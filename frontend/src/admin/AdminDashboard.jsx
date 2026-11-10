@@ -49,9 +49,12 @@ const AdminDashboard = () => {
         { name: 'Crash Course', batches: [] }
     ]);
     const [showAddBatchModal, setShowAddBatchModal] = useState(false);
+    const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
     const [targetCategoryForBatch, setTargetCategoryForBatch] = useState(null);
     const [newBatchName, setNewBatchName] = useState('');
+    const [newCategoryName, setNewCategoryName] = useState('');
     const [batchLoading, setBatchLoading] = useState(false);
+    const [categoryLoading, setCategoryLoading] = useState(false);
 
     const navigate = useNavigate();
 
@@ -60,6 +63,16 @@ const AdminDashboard = () => {
         const found = categories.find(c => getCatName(c) === catName);
         return (found && typeof found === 'object' && Array.isArray(found.batches)) ? found.batches : [];
     };
+
+    const isBankVisibleInCategory = (bank, categoryName) => {
+        if (!bank) return false;
+        const cats = Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : []);
+        if (!cats.length) return categoryName === 'Both';
+        if (categoryName === 'Both') return cats.includes('Both');
+        return cats.includes(categoryName);
+    };
+
+    const getCategoryQuestionCount = (categoryName) => questionBanks.filter(bank => isBankVisibleInCategory(bank, categoryName)).length;
 
     const fetchAllData = useCallback(async () => {
         try {
@@ -99,8 +112,9 @@ const AdminDashboard = () => {
 
         } catch (err) {
             console.log("Fetch failed or unauthorized", err);
-            if (err.response && err.response.status === 401) {
+            if (err.response && (err.response.status === 401 || err.response.status === 403)) {
                 localStorage.removeItem('token');
+                localStorage.removeItem('user');
                 navigate('/login');
             }
         }
@@ -143,6 +157,52 @@ const AdminDashboard = () => {
             fetchAllData();
         } catch (err) {
             alert(err.response?.data?.message || 'Failed to delete batch');
+        }
+    };
+
+    const handleAddCategory = async (e) => {
+        e.preventDefault();
+        const trimmed = newCategoryName.trim();
+        if (!trimmed) return;
+        setCategoryLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            await axios.post(`${API_URL}/api/admin/categories`, { name: trimmed }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            alert(`Category "${trimmed}" added successfully!`);
+            setNewCategoryName('');
+            setShowAddCategoryModal(false);
+            fetchAllData();
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to add category');
+        } finally {
+            setCategoryLoading(false);
+        }
+    };
+
+    const handleDeleteCategory = async (categoryName) => {
+        if (['Both', 'MRB', 'AIAPGET', 'Crash Course'].includes(categoryName)) {
+            alert('Default categories cannot be deleted.');
+            return;
+        }
+
+        if (!window.confirm(`Delete category "${categoryName}"? This will remove it from the category list and clean any test assignments to it.`)) {
+            return;
+        }
+
+        try {
+            const token = localStorage.getItem('token');
+            await axios.delete(`${API_URL}/api/admin/categories/${encodeURIComponent(categoryName)}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (selectedVaultCategory === categoryName) {
+                setSelectedVaultCategory(null);
+                setSelectedVaultBatch('All');
+            }
+            fetchAllData();
+        } catch (err) {
+            alert(err.response?.data?.message || 'Failed to delete category');
         }
     };
 
@@ -271,9 +331,22 @@ const AdminDashboard = () => {
         }
     };
 
+    // Role guard: redirect if user is not admin or faculty
     useEffect(() => {
+        try {
+            const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+            if (!storedUser?.role || (storedUser.role !== 'admin' && storedUser.role !== 'faculty')) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('user');
+                navigate('/login');
+                return;
+            }
+        } catch (e) {
+            navigate('/login');
+            return;
+        }
         fetchAllData();
-    }, [fetchAllData]);
+    }, [fetchAllData, navigate]);
 
     const handleLogout = () => {
         localStorage.removeItem('token');
@@ -453,10 +526,8 @@ const AdminDashboard = () => {
     const filteredQuestionBanks = questionBanks.filter(bank => {
         const titleMatch = bank.title.toLowerCase().includes(searchQuery.toLowerCase());
         if (!selectedVaultCategory) return titleMatch;
-        const cats = Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : ['Both']);
-        const categoryMatch = selectedVaultCategory === 'Both' 
-            ? (cats.includes('Both') || cats.length === 0)
-            : (cats.includes(selectedVaultCategory) || cats.includes('Both'));
+
+        const categoryMatch = isBankVisibleInCategory(bank, selectedVaultCategory);
         if (!categoryMatch) return false;
 
         if (selectedVaultBatch && selectedVaultBatch !== 'All') {
@@ -594,17 +665,20 @@ return (
                                     <p className="text-slate-500 text-sm">Select a category to view its batches and tests.</p>
                                     <p className="text-[11px] text-slate-400 mt-0.5">Tests set for a specific batch are visible ONLY to students of that batch.</p>
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddCategoryModal(true)}
+                                    className="flex items-center gap-1.5 px-3 py-2 bg-[#0F172A] hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer whitespace-nowrap self-start sm:self-auto"
+                                >
+                                    <Plus size={14} /> Add Category
+                                </button>
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                                 {categories.map((catObj) => {
                                     const name = getCatName(catObj);
                                     const batches = getCatBatches(name);
                                     const { icon, bg, border, badge, hover } = getCategoryStyle(name);
-                                    const count = questionBanks.filter(b => {
-                                        const cats = Array.isArray(b.category) ? b.category : (b.category ? [b.category] : ['Both']);
-                                        if (name === 'Both') return cats.includes('Both') || cats.length === 0;
-                                        return cats.includes(name) || cats.includes('Both');
-                                    }).length;
+                                    const count = getCategoryQuestionCount(name);
 
                                     return (
                                         <div
@@ -615,9 +689,24 @@ return (
                                             <div>
                                                 <div className="flex justify-between items-start mb-3">
                                                     <div className="text-3xl">{icon}</div>
-                                                    <span className="text-[10px] font-bold text-slate-500 bg-white/80 px-2.5 py-0.5 rounded-full border border-slate-200/60 shadow-xs">
-                                                        {batches.length} {batches.length === 1 ? 'batch' : 'batches'}
-                                                    </span>
+                                                    <div className="flex items-center gap-2">
+                                                        {name !== 'Both' && name !== 'MRB' && name !== 'AIAPGET' && name !== 'Crash Course' && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={(e) => {
+                                                                    e.stopPropagation();
+                                                                    handleDeleteCategory(name);
+                                                                }}
+                                                                className="p-1.5 rounded-lg bg-white/80 border border-slate-200 text-slate-500 hover:text-red-600 hover:border-red-200 transition-colors"
+                                                                title={`Delete ${name}`}
+                                                            >
+                                                                <Trash2 size={12} />
+                                                            </button>
+                                                        )}
+                                                        <span className="text-[10px] font-bold text-slate-500 bg-white/80 px-2.5 py-0.5 rounded-full border border-slate-200/60 shadow-xs">
+                                                            {batches.length} {batches.length === 1 ? 'batch' : 'batches'}
+                                                        </span>
+                                                    </div>
                                                 </div>
                                                 <h3 className="text-lg font-bold text-slate-800 mb-1">{name}</h3>
                                                 <p className="text-xs text-slate-500 font-medium line-clamp-1">
@@ -1352,6 +1441,59 @@ return (
                         fetchAllData();
                     }}
                 />
+            )}
+            {showAddCategoryModal && (
+                <div className="fixed inset-0 bg-black/60 z-[90] flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6 relative animate-in zoom-in duration-200">
+                        <button
+                            onClick={() => setShowAddCategoryModal(false)}
+                            className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-slate-100 text-slate-400"
+                        >
+                            <X size={18} />
+                        </button>
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center font-bold">
+                                <Plus size={20} />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-slate-800 text-base">Add New Category</h3>
+                                <p className="text-[11px] text-slate-400">Create a category to organize question banks and videos.</p>
+                            </div>
+                        </div>
+                        <form onSubmit={handleAddCategory} className="space-y-4">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                                    Category Name
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    placeholder="e.g. Clinical, Surgery, Revision"
+                                    value={newCategoryName}
+                                    onChange={(e) => setNewCategoryName(e.target.value)}
+                                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-orange-500/20 text-sm font-medium"
+                                    autoFocus
+                                />
+                            </div>
+                            <div className="flex gap-2 pt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowAddCategoryModal(false)}
+                                    className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-xs hover:bg-slate-50 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={categoryLoading || !newCategoryName.trim()}
+                                    className="flex-1 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs shadow-md shadow-orange-700/20 disabled:opacity-50 transition-all"
+                                >
+                                    {categoryLoading ? 'Creating...' : 'Create Category'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             )}
             {showAddBatchModal && (
                 <div className="fixed inset-0 bg-black/60 z-[90] flex items-center justify-center p-4 backdrop-blur-sm">
