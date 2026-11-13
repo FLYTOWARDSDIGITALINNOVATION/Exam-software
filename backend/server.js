@@ -1122,14 +1122,14 @@ app.get('/api/reviews/approved', async (req, res) => {
     } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-app.get('/api/admin/reviews', verifyAdmin, async (req, res) => {
+app.get('/api/admin/reviews', verifyEducator, async (req, res) => {
     try {
         const reviews = await Review.find().populate('userId', 'fullName email').sort({ createdAt: -1 });
         res.json(reviews);
     } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-app.put('/api/admin/reviews/:id', verifyAdmin, async (req, res) => {
+app.put('/api/admin/reviews/:id', verifyEducator, async (req, res) => {
     try {
         const updates = req.body;
         const review = await Review.findByIdAndUpdate(req.params.id, updates, { new: true });
@@ -1137,7 +1137,7 @@ app.put('/api/admin/reviews/:id', verifyAdmin, async (req, res) => {
     } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
-app.delete('/api/admin/reviews/:id', verifyAdmin, async (req, res) => {
+app.delete('/api/admin/reviews/:id', verifyEducator, async (req, res) => {
     try {
         await Review.findByIdAndDelete(req.params.id);
         res.json({ message: 'Review deleted' });
@@ -1669,4 +1669,21 @@ async function createInitialAdmin() {
 }
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`📡 Server: http://localhost:${PORT}`));
+if (require.main === module) {
+    app.listen(PORT, () => console.log(`📡 Server: http://localhost:${PORT}`));
+}
+
+module.exports = {
+    app,
+    verifyToken,
+    verifyAdmin,
+    verifyEducator,
+    Review,
+    User,
+    AdminUser,
+    QuestionBank,
+    Category,
+    ReAttemptRequest,
+    Attempt,
+    Video
+};
