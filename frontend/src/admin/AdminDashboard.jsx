@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-    TrendingUp, Calendar, FileText, Trash2, Edit, Download, Upload, X, Check, Search, Users, Star, Eye, Copy, Plus
+    TrendingUp, Calendar, FileText, Trash2, Edit, Download, Upload, X, Check, Search, Users, Star, Eye, Copy, Plus, GripVertical
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useCallback } from 'react';
@@ -55,6 +55,9 @@ const AdminDashboard = () => {
     const [newCategoryName, setNewCategoryName] = useState('');
     const [batchLoading, setBatchLoading] = useState(false);
     const [categoryLoading, setCategoryLoading] = useState(false);
+    const [duplicatingBank, setDuplicatingBank] = useState(null);
+    const [draggedBankId, setDraggedBankId] = useState(null);
+    const [dragOverBatch, setDragOverBatch] = useState(null);
 
     const navigate = useNavigate();
 
@@ -62,6 +65,19 @@ const AdminDashboard = () => {
     const getCatBatches = (catName) => {
         const found = categories.find(c => getCatName(c) === catName);
         return (found && typeof found === 'object' && Array.isArray(found.batches)) ? found.batches : [];
+    };
+
+    const getCardAvailableBatches = (bank) => {
+        const batchSet = new Set();
+        if (selectedVaultCategory) {
+            getCatBatches(selectedVaultCategory).forEach(b => batchSet.add(b));
+        } else {
+            const cats = Array.isArray(bank?.category) ? bank.category : (bank?.category ? [bank.category] : ['Both']);
+            cats.forEach(c => {
+                getCatBatches(c).forEach(b => batchSet.add(b));
+            });
+        }
+        return Array.from(batchSet);
     };
 
     const isBankVisibleInCategory = (bank, categoryName) => {
@@ -374,26 +390,23 @@ const AdminDashboard = () => {
         }
     };
 
-    const handleDuplicate = async (bank) => {
-        const customTitle = window.prompt(`Duplicate question paper "${bank.title}"? Enter title for new paper:`, `${bank.title} (Copy)`);
-        if (customTitle === null) return;
+    const handleDuplicate = (bank) => {
+        setDuplicatingBank(bank);
+    };
 
+    const handleUpdateBankBatches = async (bankId, newBatches) => {
+        const batchesArray = Array.isArray(newBatches) ? newBatches : [newBatches];
         try {
             const token = localStorage.getItem('token');
-            const res = await axios.post(
-                `${API_URL}/api/admin/question-banks/${bank._id}/duplicate`,
-                { title: customTitle.trim() || `${bank.title} (Copy)` },
-                { headers: { Authorization: `Bearer ${token}` } }
-            );
-            alert('Question paper duplicated successfully! Opening editor for the duplicated paper...');
-            await fetchAllData();
-            if (res.data?.bank) {
-                setEditingBank(res.data.bank);
-            }
+            // Optimistically update local state for snappy UI
+            setQuestionBanks(prev => prev.map(b => (b._id === bankId || b.id === bankId) ? { ...b, batches: batchesArray } : b));
+            await axios.patch(`${API_URL}/api/admin/question-banks/${bankId}/batches`, { batches: batchesArray }, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
         } catch (err) {
-            console.error("Duplicate failed", err);
-            const msg = err.response?.data?.message || err.message;
-            alert(`Failed to duplicate: ${msg}`);
+            console.error("Batch update failed", err);
+            alert(err.response?.data?.message || 'Failed to update batch');
+            fetchAllData();
         }
     };
 
@@ -771,15 +784,40 @@ return (
                                     </button>
                                 </div>
 
+                                {/* Drag-and-drop indicator banner when dragging */}
+                                {draggedBankId && (
+                                    <div className="mb-3 py-2 px-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs font-semibold flex items-center justify-between animate-pulse">
+                                        <span>🎯 Drop on any batch below to reassign this question paper!</span>
+                                        <span className="text-[10px] font-bold bg-emerald-200 text-emerald-900 px-2 py-0.5 rounded-full uppercase">Drop Target Ready</span>
+                                    </div>
+                                )}
+
                                 {/* Batch pills */}
                                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
                                     <button
                                         type="button"
                                         onClick={() => setSelectedVaultBatch('All')}
+                                        onDragOver={(e) => {
+                                            e.preventDefault();
+                                            e.dataTransfer.dropEffect = 'move';
+                                            if (dragOverBatch !== 'All') setDragOverBatch('All');
+                                        }}
+                                        onDragLeave={() => {
+                                            if (dragOverBatch === 'All') setDragOverBatch(null);
+                                        }}
+                                        onDrop={async (e) => {
+                                            e.preventDefault();
+                                            const bankId = e.dataTransfer.getData('text/plain') || draggedBankId;
+                                            setDragOverBatch(null);
+                                            setDraggedBankId(null);
+                                            if (bankId) await handleUpdateBankBatches(bankId, ['All']);
+                                        }}
                                         className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                            selectedVaultBatch === 'All'
-                                                ? 'bg-[#0F172A] text-white shadow-sm'
-                                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                            dragOverBatch === 'All'
+                                                ? 'ring-2 ring-emerald-500 bg-emerald-100 text-emerald-900 scale-105'
+                                                : selectedVaultBatch === 'All'
+                                                    ? 'bg-[#0F172A] text-white shadow-sm'
+                                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                                         }`}
                                     >
                                         All Batches
@@ -791,15 +829,40 @@ return (
                                             const bArr = Array.isArray(b.batches) ? b.batches : (b.batches ? [b.batches] : []);
                                             return bArr.includes(bName);
                                         }).length;
+                                        const isHoveredForDrop = dragOverBatch === bName;
                                         return (
-                                            <div key={bName} className="flex items-center bg-slate-100 rounded-lg p-0.5">
+                                            <div
+                                                key={bName}
+                                                onDragOver={(e) => {
+                                                    e.preventDefault();
+                                                    e.dataTransfer.dropEffect = 'move';
+                                                    if (dragOverBatch !== bName) setDragOverBatch(bName);
+                                                }}
+                                                onDragLeave={() => {
+                                                    if (dragOverBatch === bName) setDragOverBatch(null);
+                                                }}
+                                                onDrop={async (e) => {
+                                                    e.preventDefault();
+                                                    const bankId = e.dataTransfer.getData('text/plain') || draggedBankId;
+                                                    setDragOverBatch(null);
+                                                    setDraggedBankId(null);
+                                                    if (bankId) await handleUpdateBankBatches(bankId, [bName]);
+                                                }}
+                                                className={`flex items-center rounded-lg p-0.5 transition-all ${
+                                                    isHoveredForDrop
+                                                        ? 'ring-2 ring-emerald-500 bg-emerald-100 text-emerald-900 scale-105 shadow-md'
+                                                        : 'bg-slate-100'
+                                                }`}
+                                            >
                                                 <button
                                                     type="button"
                                                     onClick={() => setSelectedVaultBatch(bName)}
                                                     className={`px-3 py-1 rounded-md text-xs font-bold transition-all flex items-center gap-1.5 ${
-                                                        selectedVaultBatch === bName
-                                                            ? 'bg-teal-700 text-white shadow-sm'
-                                                            : 'text-slate-700 hover:bg-slate-200'
+                                                        isHoveredForDrop
+                                                            ? 'text-emerald-900 font-black'
+                                                            : selectedVaultBatch === bName
+                                                                ? 'bg-teal-700 text-white shadow-sm'
+                                                                : 'text-slate-700 hover:bg-slate-200'
                                                     }`}
                                                 >
                                                     <span>{bName}</span>
@@ -840,28 +903,66 @@ return (
                             <div className="space-y-4">
                                 {filteredQuestionBanks.length > 0 ?
                                     filteredQuestionBanks.map((bank) => (
-                                        <div key={bank._id || bank.id} className="bg-white p-4 md:p-6 rounded-xl border border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-0 hover:shadow-sm transition-shadow">
-                                            <div className="w-full">
-                                                <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-2 md:mb-1">
-                                                    <h4 className="text-base md:text-lg font-bold text-slate-900">{bank.title}</h4>
-                                                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${bank.difficulty === 'Hard' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}`}>
-                                                        {bank.difficulty}
-                                                    </span>
-                                                    {(Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : ['Both'])).map((cat, idx) => (
-                                                        <span key={idx} className={`text-[10px] px-2 py-0.5 rounded-full font-black tracking-wider ${cat === 'AIAPGET' ? 'bg-indigo-100 text-indigo-700' : cat === 'MRB' ? 'bg-orange-100 text-orange-700' : cat === 'Crash Course' ? 'bg-rose-100 text-rose-700' : 'bg-teal-100 text-teal-700'}`}>
-                                                            {cat}
-                                                        </span>
-                                                    ))}
-                                                    {(Array.isArray(bank.batches) ? bank.batches : (bank.batches ? [bank.batches] : ['All'])).map((b, bIdx) => (
-                                                        <span key={`b-${bIdx}`} className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                                                            Batch: {b}
-                                                        </span>
-                                                    ))}
+                                        <div
+                                            key={bank._id || bank.id}
+                                            draggable={true}
+                                            onDragStart={(e) => {
+                                                e.dataTransfer.setData('text/plain', bank._id || bank.id);
+                                                setDraggedBankId(bank._id || bank.id);
+                                            }}
+                                            onDragEnd={() => {
+                                                setDraggedBankId(null);
+                                                setDragOverBatch(null);
+                                            }}
+                                            className={`bg-white p-4 md:p-6 rounded-xl border border-slate-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 md:gap-0 hover:shadow-md transition-all ${
+                                                draggedBankId === (bank._id || bank.id) ? 'opacity-50 ring-2 ring-teal-500 shadow-lg' : ''
+                                            }`}
+                                        >
+                                            <div className="w-full flex items-start gap-2.5">
+                                                <div
+                                                    className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-600 pt-1 -ml-1 transition hidden sm:block"
+                                                    title="Drag and drop onto a batch above to assign"
+                                                >
+                                                    <GripVertical size={18} />
                                                 </div>
-                                                <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-slate-500 font-medium">
-                                                    <span>{bank.questionsCount || bank.questions} questions</span>
-                                                    <span>Uploaded {new Date(bank.createdAt || bank.uploaded).toLocaleDateString()}</span>
-                                                    <span>{bank.attempts} attempts</span>
+                                                <div className="w-full">
+                                                    <div className="flex flex-wrap items-center gap-2 md:gap-3 mb-2 md:mb-1">
+                                                        <h4 className="text-base md:text-lg font-bold text-slate-900">{bank.title}</h4>
+                                                        {(Array.isArray(bank.category) ? bank.category : (bank.category ? [bank.category] : ['Both'])).map((cat, idx) => (
+                                                            <span key={idx} className={`text-[10px] px-2 py-0.5 rounded-full font-black tracking-wider ${cat === 'AIAPGET' ? 'bg-indigo-100 text-indigo-700' : cat === 'MRB' ? 'bg-orange-100 text-orange-700' : cat === 'Crash Course' ? 'bg-rose-100 text-rose-700' : 'bg-teal-100 text-teal-700'}`}>
+                                                                {cat}
+                                                            </span>
+                                                        ))}
+
+                                                        {/* Batch Selector on the card for quick changes */}
+                                                        {(() => {
+                                                            const availableBatches = getCardAvailableBatches(bank);
+                                                            const currentBatch = Array.isArray(bank.batches) && bank.batches[0] ? bank.batches[0] : 'All';
+                                                            const selectValue = (currentBatch === 'All' || availableBatches.includes(currentBatch)) ? currentBatch : 'All';
+                                                            return (
+                                                                <div className="inline-flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200/80 transition-colors border border-slate-200/90 rounded-lg px-2 py-0.5 text-xs">
+                                                                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Batch:</span>
+                                                                    <select
+                                                                        value={selectValue}
+                                                                        onChange={(e) => handleUpdateBankBatches(bank._id || bank.id, [e.target.value])}
+                                                                        onClick={(e) => e.stopPropagation()}
+                                                                        className="bg-transparent font-bold text-teal-800 hover:text-teal-900 border-none outline-none cursor-pointer pr-1 text-xs"
+                                                                        title="Change batch for this question paper"
+                                                                    >
+                                                                        <option value="All">All Batches</option>
+                                                                        {availableBatches.map((b) => (
+                                                                            <option key={b} value={b}>{b}</option>
+                                                                        ))}
+                                                                    </select>
+                                                                </div>
+                                                            );
+                                                        })()}
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-slate-500 font-medium">
+                                                        <span>{bank.questionsCount || bank.questions} questions</span>
+                                                        <span>Uploaded {new Date(bank.createdAt || bank.uploaded).toLocaleDateString()}</span>
+                                                        <span>{bank.attempts} attempts</span>
+                                                    </div>
                                                 </div>
                                             </div>
                                             <div className="flex flex-wrap items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
@@ -1561,6 +1662,20 @@ return (
                     </div>
                 </div>
             )}
+            {duplicatingBank && (
+                <DuplicateQuestionBankModal
+                    bank={duplicatingBank}
+                    categories={categories}
+                    onClose={() => setDuplicatingBank(null)}
+                    onSuccess={(newBank) => {
+                        setDuplicatingBank(null);
+                        fetchAllData();
+                        if (newBank) {
+                            setEditingBank(newBank);
+                        }
+                    }}
+                />
+            )}
             {statsBank && (
                 <QuestionBankStatsModal
                     bank={statsBank}
@@ -1590,6 +1705,166 @@ const OverviewCard = ({ icon, value, label }) => (
         <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{label}</p>
     </div>
 );
+
+const DuplicateQuestionBankModal = ({ bank, categories = [], onClose, onSuccess }) => {
+    const getCatName = (cat) => typeof cat === 'string' ? cat : (cat?.name || '');
+    const getCatBatches = (catName) => {
+        const found = categories.find(c => getCatName(c) === catName);
+        return (found && typeof found === 'object' && Array.isArray(found.batches)) ? found.batches : [];
+    };
+
+    const initialCat = Array.isArray(bank.category) && bank.category[0] ? bank.category[0] : (bank.category || 'MRB');
+    const initialBatches = getCatBatches(initialCat);
+    const initialBatchVal = Array.isArray(bank.batches) && initialBatches.includes(bank.batches[0]) ? bank.batches[0] : 'All';
+    const [title, setTitle] = useState(`${bank.title} (Copy)`);
+    const [targetCategory, setTargetCategory] = useState(initialCat);
+    const [targetBatch, setTargetBatch] = useState(initialBatchVal);
+    const [loading, setLoading] = useState(false);
+
+    const availableBatches = getCatBatches(targetCategory);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!title.trim()) {
+            alert('Please enter a paper title');
+            return;
+        }
+        setLoading(true);
+        try {
+            const token = localStorage.getItem('token');
+            const validBatch = (targetBatch === 'All' || availableBatches.includes(targetBatch)) ? targetBatch : 'All';
+            const res = await axios.post(
+                `${API_URL}/api/admin/question-banks/${bank._id || bank.id}/duplicate`,
+                {
+                    title: title.trim(),
+                    category: [targetCategory],
+                    batches: [validBatch]
+                },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            alert(`Question paper duplicated successfully to "${targetCategory}" (Batch: ${validBatch})! Opening editor...`);
+            onSuccess(res.data?.bank);
+        } catch (err) {
+            console.error("Duplicate failed", err);
+            const msg = err.response?.data?.message || err.message;
+            alert(`Failed to duplicate: ${msg}`);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-black/60 z-[95] flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl p-6 relative animate-in zoom-in duration-200">
+                <button
+                    onClick={onClose}
+                    className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-slate-100 text-slate-400 transition"
+                >
+                    <X size={18} />
+                </button>
+                <div className="flex items-center gap-2 mb-2">
+                    <div className="p-2 bg-purple-100 text-purple-700 rounded-xl">
+                        <Copy size={20} />
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-bold text-slate-900">Duplicate Question Paper</h3>
+                        <p className="text-[11px] text-slate-500">Clone into MRB, Crash Course, or any category & batch</p>
+                    </div>
+                </div>
+
+                <div className="bg-purple-50/60 border border-purple-100 rounded-xl p-3 mb-4 text-xs text-purple-900">
+                    <span className="font-bold text-purple-700 block mb-0.5">Original Source Paper:</span>
+                    <span className="font-semibold text-slate-800">{bank.title}</span>
+                    <div className="text-[11px] text-slate-500 mt-1">
+                        Current Category: <span className="font-medium text-slate-700">{(Array.isArray(bank.category) ? bank.category : [bank.category || 'Both']).join(', ')}</span> | 
+                        Batch: <span className="font-medium text-slate-700">{(Array.isArray(bank.batches) ? bank.batches : [bank.batches || 'All']).join(', ')}</span>
+                    </div>
+                </div>
+
+                <form onSubmit={handleSubmit} className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                            New Question Paper Title
+                        </label>
+                        <input
+                            type="text"
+                            required
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            placeholder="e.g. Crash Course Model Paper 1"
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 font-medium"
+                        />
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                            Target Category / Exam
+                        </label>
+                        <select
+                            value={targetCategory}
+                            onChange={(e) => {
+                                const newCat = e.target.value;
+                                setTargetCategory(newCat);
+                                setTargetBatch('All');
+                            }}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 bg-white font-semibold text-slate-800 cursor-pointer"
+                        >
+                            {categories.map((c) => {
+                                const cName = getCatName(c);
+                                return <option key={cName} value={cName}>{cName}</option>;
+                            })}
+                        </select>
+                        <p className="text-[11px] text-slate-400 mt-1">
+                            Easily move or adapt papers across MRB, Crash Course, AIAPGET, or Both.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-1.5">
+                            Target Batch in {targetCategory}
+                        </label>
+                        <select
+                            value={targetBatch}
+                            onChange={(e) => setTargetBatch(e.target.value)}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 bg-white font-semibold text-slate-800 cursor-pointer"
+                        >
+                            <option value="All">All Batches (Open to all {targetCategory} students)</option>
+                            {availableBatches.map((b) => (
+                                <option key={b} value={b}>{b}</option>
+                            ))}
+                        </select>
+                        {availableBatches.length === 0 ? (
+                            <p className="text-[11px] text-slate-400 mt-1">
+                                No custom batches in {targetCategory} yet. Paper will be set to All Batches.
+                            </p>
+                        ) : (
+                            <p className="text-[11px] text-teal-600 mt-1 font-medium">
+                                {availableBatches.length} custom batch{availableBatches.length > 1 ? 'es' : ''} available in {targetCategory}.
+                            </p>
+                        )}
+                    </div>
+
+                    <div className="flex gap-2.5 pt-3">
+                        <button
+                            type="button"
+                            onClick={onClose}
+                            className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold text-xs hover:bg-slate-50 transition"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            disabled={loading || !title.trim()}
+                            className="flex-1 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md shadow-purple-600/20 disabled:opacity-50 transition"
+                        >
+                            {loading ? 'Duplicating...' : 'Duplicate Question Paper'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    );
+};
 
 const UploadModal = ({ onClose, onSuccess, onAuthError, defaultCategory, categories = ['Both', 'MRB', 'AIAPGET', 'Crash Course'] }) => {
     const DRAFT_KEY = 'questionbank_draft';

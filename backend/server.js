@@ -14,7 +14,8 @@ dotenv.config();
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 app.use((req, res, next) => {
     console.log(`[DEBUG] ${req.method} ${req.url}`);
     next();
@@ -843,11 +844,26 @@ app.post('/api/admin/question-banks/:id/duplicate', verifyEducator, async (req, 
 
         const newTitle = (req.body.title && req.body.title.trim()) ? req.body.title.trim() : `${originalBank.title} (Copy)`;
 
+        let targetCategory = originalBank.category || ['Both'];
+        if (req.body.category) {
+            targetCategory = Array.isArray(req.body.category) ? req.body.category : [req.body.category];
+        }
+        let targetBatches = ['All'];
+        if (req.body.batches) {
+            targetBatches = Array.isArray(req.body.batches) ? req.body.batches : [req.body.batches];
+        } else {
+            const origCats = Array.isArray(originalBank.category) ? originalBank.category : [originalBank.category || 'Both'];
+            const isSameCategory = origCats.length === targetCategory.length && origCats.every(c => targetCategory.includes(c));
+            if (isSameCategory) {
+                targetBatches = originalBank.batches || ['All'];
+            }
+        }
+
         const duplicatedBank = new QuestionBank({
             title: newTitle,
             difficulty: originalBank.difficulty || 'Medium',
-            category: originalBank.category || ['Both'],
-            batches: originalBank.batches || ['All'],
+            category: targetCategory,
+            batches: targetBatches,
             duration: originalBank.duration || 60,
             negativeMarking: originalBank.negativeMarking || false,
             status: req.body.status || originalBank.status || 'draft',
@@ -859,13 +875,35 @@ app.post('/api/admin/question-banks/:id/duplicate', verifyEducator, async (req, 
         });
 
         await duplicatedBank.save();
-        console.log(`[DUPLICATE] Created duplicated paper: ${duplicatedBank._id} ("${duplicatedBank.title}") from ${originalBank._id}`);
+        console.log(`[DUPLICATE] Created duplicated paper: ${duplicatedBank._id} ("${duplicatedBank.title}") in [${targetCategory.join(', ')}] batches [${targetBatches.join(', ')}] from ${originalBank._id}`);
         res.status(201).json({
             message: 'Question paper duplicated successfully',
             bank: duplicatedBank
         });
     } catch (err) {
         console.error("Duplicate question bank error:", err);
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Update batches for a question bank
+app.patch('/api/admin/question-banks/:id/batches', verifyEducator, async (req, res) => {
+    try {
+        const { batches } = req.body;
+        const bank = await QuestionBank.findById(req.params.id);
+        if (!bank) return res.status(404).json({ message: 'Question paper not found' });
+
+        let newBatches = ['All'];
+        if (Array.isArray(batches)) {
+            newBatches = batches.length > 0 ? batches : ['All'];
+        } else if (typeof batches === 'string' && batches.trim()) {
+            newBatches = [batches.trim()];
+        }
+
+        bank.batches = newBatches;
+        await bank.save();
+        res.json({ message: 'Batches updated successfully', bank });
+    } catch (err) {
         res.status(500).json({ message: err.message });
     }
 });
@@ -1670,7 +1708,11 @@ async function createInitialAdmin() {
 
 const PORT = process.env.PORT || 5000;
 if (require.main === module) {
-    app.listen(PORT, () => console.log(`📡 Server: http://localhost:${PORT}`));
+    const server = app.listen(PORT, () => console.log(`📡 Server: http://localhost:${PORT}`));
+    // Extend server timeouts to 15 minutes to allow large video uploads to finish without prematurely terminating
+    server.timeout = 15 * 60 * 1000;
+    server.keepAliveTimeout = 15 * 60 * 1000;
+    server.headersTimeout = 15 * 60 * 1000 + 1000;
 }
 
 module.exports = {

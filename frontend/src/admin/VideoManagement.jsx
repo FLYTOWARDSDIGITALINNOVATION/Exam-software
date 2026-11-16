@@ -249,7 +249,12 @@ export default function VideoManagement({ API_URL }) {
 
                 setVideoQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'done', progress: 100 } : q));
             } catch (err) {
-                const msg = err.response?.data?.message || err.message || 'Upload failed';
+                let msg = err.response?.data?.message || err.message || 'Upload failed';
+                if (err.response?.status === 413) {
+                    msg = 'File exceeds the server maximum upload limit (HTTP 413 Request Entity Too Large). Increase Nginx/reverse proxy client_max_body_size.';
+                } else if (err.code === 'ERR_NETWORK' || !err.response) {
+                    msg = 'Network connection reset or upload timed out. For large files, verify Nginx timeouts and client_max_body_size.';
+                }
                 setVideoQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'error', error: msg } : q));
                 allSucceeded = false;
             }
@@ -406,7 +411,13 @@ export default function VideoManagement({ API_URL }) {
             fetchVideos();
         } catch (err) {
             console.error('Video update failed:', err);
-            setEditError(err.response?.data?.message || err.message || 'Failed to update video');
+            let msg = err.response?.data?.message || err.message || 'Failed to update video';
+            if (err.response?.status === 413) {
+                msg = 'File exceeds the server maximum upload limit (HTTP 413 Request Entity Too Large). Increase Nginx/reverse proxy client_max_body_size.';
+            } else if (err.code === 'ERR_NETWORK' || !err.response) {
+                msg = 'Network connection reset or upload timed out. For large files, verify Nginx timeouts and client_max_body_size.';
+            }
+            setEditError(msg);
         } finally {
             setIsEditUploading(false);
         }
